@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>锐小招</title>
+    <link rel="icon" href="./assets/favicon.ico" type="image/x-icon"/>
+    <script type="text/javascript" src="9.4.0/vendor/web-apps/apps/api/documents/api.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+        }
+
+        #editor {
+            width: 100%;
+            height: 100%;
+        }
+
+        .container {
+            width: 100vw;
+            height: 100vh;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div id="editor"></div>
+</div>
+
+<script>
+    'use strict'
+
+    window.OO_FILE_STREAM_ONLY = true
+
+    const STREAM_FLAG_INTERVAL_MS = 200
+    const STREAM_FLAG_MAX_ATTEMPTS = 50
+    const DOWNLOAD_REVOKE_DELAY_MS = 1500
+
+    let docEditor = null
+    let pendingSave = null
+    let pendingOpenBuffer = null
+    let pendingOpenFileExt = null
+    let currentTitle = ''
+    let streamFallback = 'autosave'
+
+    // x2t_helper 注入状态：按编辑器 iframe 的 window 记忆（重建编辑器后 iframe 是全新 window，自动失效）
+    let x2tState = null
+    // 当前文档的媒体映射（convertToBin 返回的 {'media/xxx': blobUrl}），供 addImageUrl 拦截替换
+    let pendingMediaMap = null
+
+    // 9.4 的 api.js 用 replaceChild 把占位 div 换成 iframe，name="frameEditor"；旧版回退 #editor iframe
+    // 重建编辑器时旧 iframe 可能短暂残留，取最后一个（最新的）
+    function getEditorFrame() {
+        const frames = document.querySelectorAll('iframe[name="frameEditor"]')
+        if (frames.length) return frames[frames.length - 1]
+        return document.querySelector('#editor iframe')
+    }
+
+    function postToParent(message, transfer) {
+        if (window.parent === window) return
+        window.parent.postMessage(message, '*', transfer || [])
+    }
+
+    function setStreamOnlyFlag() {
+        const frame = getEditorFrame()
+        if (!frame || !frame.contentWindow) return false
+        frame.contentWindow.OO_FILE_STREAM_ONLY = true
+        return true
+    }
+
+    // 把宿主 realm 的字节重建为 iframe realm 的 Uint8Array（x2t_helper 用 instanceof 判断类型）
+    function toIframeBytes(w, data) {
+        if (data instanceof Uint8Array) {
+            return new w.Uint8Array(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength))
+        }
+        if (data instanceof ArrayBuffer) {
+            return new w.Uint8Array(data.slice(0))
+        }
+        if (ArrayBuffer.isView(data)) {
+            return new w.Uint8Array(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength))
+        }
+        throw new Error('不支持的二进制类型')
+    }
+
+    // iframe realm 的视图 → 宿主 realm 的 ArrayBuffer（transfer 要求 ArrayBuffer）
+    function toHostArrayBuffer(data) {
+        if (data instanceof ArrayBuffer) return data
+        if (ArrayBuffer.isView(data)) {
+            return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)
+        }
+        return data
+    }
+
+    // 9.4 web-apps 不会自动加载 x2t_helper，需要宿主注入到编辑器 iframe
+    // （x2t_helper 内部 SCRIPT_PATH 相对 iframe 页面解析，与 9.4.0/vendor 布局自洽）
+    const X2T_HELPER_SRC = '../../../../sdkjs/common/wasm/x2t/x2t_helper.js'
+
+    function ensureX2tInjected() {
+        const frame = getEditorFrame()
+        const w = frame && frame.contentWindow
+        if (!w) throw new Error('编辑器 iframe 未就绪')
+        if (x2tState && x2tState.win === w) return x2tState.promise
+        if (w.AscCommon && w.AscCommon.x2t && typeof w.AscCommon.x2t.convertToBin === 'function') {
+            x2tState = { win: w, promise: Promise.resolve(w.AscCommon.x2t) }
+            return x2tState.promise
+        }
+        const promise = new Promise((resolve, reject) => {
+            try {
+                const script = w.document.createElement('script')
+                script.src = X2T_HELPER_SRC
+                script.onload = () => {
+                    const x2t = w.AscCommon && w.AscCommon.x2t
+                    if (x2t && typeof x2t.convertToBin === 'function') {
+                        x2tState = { win: w, promise: Promise.resolve(x2t) }
+                        resolve(x2t)
+                    } else {
+                        reject(new Error('x2t_helper 加载后未找到 AscCommon.x2t'))
+                    }
+                }
+                script.onerror = () => reject(new Error('x2t_helper.js 加载失败'))
+                w.document.head.appendChild(script)
+            } catch (error) {
+                reject(error)
+            }
+        })
+        x2tState = { win: w, promise }
+        return promise
+    }
+
+    function onDocumentReady() {
+        postToParent({ type: 'onlyoffice-document-ready' })
+        let attempts = 0
+        const timer = setInterval(() => {
+            attempts += 1
+            if (setStreamOnlyFlag() || attempts > STREAM_FLAG_MAX_ATTEMPTS) clearInterval(timer)
+        }, STREAM_FLAG_INTERVAL_MS)
+        // 离线：OfflineApp 自动打开空文档并 ready 后，再注入真实字节（避免 openResult 竞态）
+        openPendingBinaryDocument()
+    }
+
+    function triggerDownload(buffer, data) {
+        const blob = new Blob([buffer], { type: 'application/octet-stream' })
+        const href = URL.createObjectURL(blob)
+        const link = document.createElement('a')
+        link.href = href
+        link.download = data.fileName || `document.${data.fileType || 'docx'}`
+        document.body.appendChild(link)
+        link.click()
+        setTimeout(() => {
+            URL.revokeObjectURL(href)
+            link.remove()
+        }, DOWNLOAD_REVOKE_DELAY_MS)
+    }
+
+    function postSaveError(requestId, error) {
+        postToParent({
+            type: 'onlyoffice-saved',
+            requestId: requestId,
+            ok: false,
+            error: String((error && error.message) || error)
+        })
+    }
+
+    function errorMessageOf(error) {
+        return String((error && error.message) || error)
+    }
+
+    function postOpenError(error) {
+        postToParent({
+            type: 'onlyoffice-open-error',
+            error: errorMessageOf(error)
+        })
+    }
+
+    function openPendingBinaryDocument() {
+        if (!pendingOpenBuffer) return
+        if (!docEditor) throw new Error('编辑器未就绪')
+        const buffer = pendingOpenBuffer
+        const fileExt = pendingOpenFileExt || 'docx'
+        pendingOpenBuffer = null
+        pendingOpenFileExt = null
+        const frame = getEditorFrame()
+        const w = frame && frame.contentWindow
+        if (!w) throw new Error('编辑器 iframe 未就绪')
+        // 原始字节（docx/xlsx/pptx）→ x2t.wasm 转 SER bin → openDocument 注入
+        ensureX2tInjected()
+            .then(x2t => x2t.convertToBin(toIframeBytes(w, buffer), currentTitle || 'document', fileExt))
+            .then(result => {
+                const serBin = result && result.binary
+                if (!serBin) throw new Error('convertToBin 未返回二进制')
+                // PDF 走原始字节直通（无签名）；其余类型必须是合法 SER bin，
+                // 否则是输入文件损坏（如旧版本保存的坏文件），提前报错避免注入 sdk 后异常。
+                if (fileExt !== 'pdf' && serBin.length >= 4 &&
+                    ['DOCY', 'XLSY', 'PPTY', 'VSDY'].indexOf(
+                        String.fromCharCode(serBin[0], serBin[1], serBin[2], serBin[3])) === -1) {
+                    throw new Error('文档转换结果无效，源文件可能已损坏，请重新导入')
+                }
+                // 文档媒体（图片等）：convertToBin 把 docx 里的图片提取为 blob URL 映射
+                // {'media/image1.png': blob:...}。sdk OfflineApp 模式会用
+                // documentUrl+media/（即 _offline_media/xxx，桌面版由 native 拦截）覆盖注册，
+                // 纯浏览器不可达 → 需拦截 addImageUrl 替换为真实 blob URL
+                const media = result && result.media
+                pendingMediaMap = media || null
+                if (w.AscCommon && w.AscCommon.g_oDocumentUrls) {
+                    const urls = w.AscCommon.g_oDocumentUrls
+                    try {
+                        if (media && typeof urls.addUrls === 'function') {
+                            urls.addUrls(media)
+                        }
+                        if (!urls.__ooMediaPatched) {
+                            urls.__ooMediaPatched = true
+                            const orig = urls.addImageUrl
+                            urls.addImageUrl = function (strPath, url) {
+                                const key = 'media/' + strPath
+                                const m = pendingMediaMap && pendingMediaMap[key]
+                                if (m) return orig.call(this, strPath, m)
+                                return orig.call(this, strPath, url)
+                            }
+                        }
+                    } catch (e) {
+                        console.error('[oo] media 注册失败', e)
+                    }
+                }
+                // serBin 是 iframe realm 的 Uint8Array → 转 ArrayBuffer 供 api.js transfer
+                docEditor.openDocument({ buffer: toHostArrayBuffer(serBin) })
+            })
+            .catch(error => {
+                postOpenError(error)
+            })
+    }
+
+    function onAppReady() {
+        // 预热 x2t（注入 helper + 编译 wasm 较耗时），文档 ready 时转换立即可用，
+        // 避免用户看到空文档等待（真实字节在首次 onDocumentReady 后再注入，避免 openResult 竞态）
+        try {
+            ensureX2tInjected()
+                .then(x2t => x2t.initialize())
+                .catch(() => {})
+        } catch (e) {}
+    }
+
+    function handleFileStream(data) {
+        const request = pendingSave
+        pendingSave = null
+        const buffer = data && data.buffer
+        if (!buffer) {
+            postSaveError(request && request.requestId, '未获取到文件流')
+            return
+        }
+        if (!request && streamFallback === 'download') {
+            triggerDownload(buffer, data)
+            return
+        }
+        postToParent({
+            type: 'onlyoffice-saved',
+            requestId: request && request.requestId,
+            ok: true,
+            buffer: buffer,
+            fileType: data.fileType || '',
+            fileName: data.fileName || ''
+        }, [buffer])
+    }
+
+    // 等待编辑器内核 API 就绪（编辑器重建/懒加载时 asc_nativeGetFile3 可能短暂不可用）
+    function waitForEditorApi(w, timeoutMs) {
+        const start = Date.now()
+        return new Promise((resolve, reject) => {
+            const tick = () => {
+                const getFile = w.Asc && w.Asc.editor && w.Asc.editor.asc_nativeGetFile3
+                if (typeof getFile === 'function') return resolve(getFile)
+                if (Date.now() - start > (timeoutMs || 10000)) {
+                    return reject(new Error('asc_nativeGetFile3 不可用（编辑器未就绪）'))
+                }
+                setTimeout(tick, 200)
+            }
+            tick()
+        })
+    }
+
+    // 离线保存：内核取当前 SER bin → x2t.wasm 转目标格式 → 字节回传宿主
+    // （离线模式 downloadAs 必走服务器，不可用；asc_nativeGetFile3 是本构建可用的取数通道）
+    async function saveOfflineBuffer(w, x2t, format, requestId, msgType) {
+        const getFile = await waitForEditorApi(w, 10000)
+        const file3 = getFile.call(w.Asc.editor)
+        if (!file3 || !file3.data) throw new Error('未获取到文档数据')
+        // asc_nativeGetFile3 返回 { data, header }：
+        //   data = BinaryFileWriter.Write(true,true) 的产物（GetBase64Memory），
+        //         是 base64 字符串且已含 "DOCY;v10;0;" 文件头，直接解码即为完整 bin；
+        //   header = "DOCY;v10;<size>;" 仅作元信息，不要再拼接（会双层头，x2t 解析越界）。
+        let bin
+        if (typeof file3.data === 'string') {
+            const binaryString = w.atob(file3.data)
+            bin = new w.Uint8Array(binaryString.length)
+            for (let i = 0; i < binaryString.length; i++) bin[i] = binaryString.charCodeAt(i)
+        } else if (ArrayBuffer.isView(file3.data)) {
+            bin = new w.Uint8Array(file3.data.buffer.slice(
+                file3.data.byteOffset, file3.data.byteOffset + file3.data.byteLength))
+        } else {
+            throw new Error('不支持的文档数据格式')
+        }
+        // 校验 SER bin 签名（DOCY/XLSY/PPTY/VSDY）：旧版本 bug 可能把 header 文本拼进
+        // data 导致双层头/损坏字节，直接喂给 x2t 会解析越界（RuntimeError: index out
+        // of bounds）。签名非法时提前报错，提示用户文档已损坏。
+        if (bin.length < 4 || ['DOCY', 'XLSY', 'PPTY', 'VSDY'].indexOf(
+            String.fromCharCode(bin[0], bin[1], bin[2], bin[3])) === -1) {
+            throw new Error('文档数据签名无效，文档可能已损坏，请重新打开后再保存')
+        }
+        const result = await x2t.convertFromBin({
+            binary: bin,          // iframe realm 字节，x2t 在 iframe 内运行
+            fileName: currentTitle || 'document',
+            fileExt: 'bin',
+            targetExt: format
+        })
+        if (!result || !result.binary) throw new Error('convertFromBin 未返回二进制')
+        const outBuffer = toHostArrayBuffer(result.binary)
+        const fileName = (result.fileName || 'document') + '.' + format
+        postToParent({
+            type: msgType || 'onlyoffice-saved',
+            requestId: requestId,
+            ok: true,
+            buffer: outBuffer,
+            fileType: format,
+            fileName: fileName
+        }, [outBuffer])
+    }
+
+    function handleSaveCommand(data) {
+        if (!docEditor) {
+            postSaveError(data && data.requestId, '编辑器未就绪')
+            return
+        }
+        setStreamOnlyFlag()
+        const requestId = data && data.requestId
+        const format = (data && data.format) || 'docx'
+        pendingSave = { requestId: requestId, format: format }
+        const frame = getEditorFrame()
+        const w = frame && frame.contentWindow
+        if (!w) {
+            pendingSave = null
+            postSaveError(requestId, '编辑器 iframe 未就绪')
+            return
+        }
+        ensureX2tInjected()
+            .then(x2t => saveOfflineBuffer(w, x2t, format, requestId))
+            .then(() => { pendingSave = null })
+            .catch(error => {
+                const req = pendingSave && pendingSave.requestId
+                pendingSave = null
+                postSaveError(req, error)
+            })
+    }
+
+    function onEditorError(event) {
+        const message = `编辑器错误: ${JSON.stringify(event && event.data)}`
+        if (!pendingSave) {
+            postOpenError(message)
+            return
+        }
+        const requestId = pendingSave.requestId
+        pendingSave = null
+        postSaveError(requestId, message)
+    }
+
+    function onRequestClose() {
+        postToParent({ type: 'onlyoffice-request-close' })
+    }
+
+    function onDocStateChange(event) {
+        postToParent({ type: 'onlyoffice-state-change', modified: !!(event && event.data) })
+    }
+
+    function onMetaChange(event) {
+        const title = event && event.data && event.data.title
+        if (title) postToParent({ type: 'onlyoffice-rename', title: title })
+    }
+
+    function onRequestRename(event) {
+        const data = event && event.data
+        const title = typeof data === 'string' ? data : data && (data.title || data.name)
+        if (!title) return
+        if (docEditor && docEditor.setMetaData) docEditor.setMetaData({ title: title })
+        postToParent({ type: 'onlyoffice-rename', title: title })
+    }
+
+    function postSaveAsError(error) {
+        postToParent({
+            type: 'onlyoffice-saveas',
+            ok: false,
+            error: String((error && error.message) || error)
+        })
+    }
+
+    // 离线另存为：与保存同链路（x2t 转目标格式）→ 字节回传 onlyoffice-saveas
+    function onRequestSaveAs(event) {
+        const data = event && event.data
+        const format = (data && (data.format || data.fileType)) || 'docx'
+        const frame = getEditorFrame()
+        const w = frame && frame.contentWindow
+        if (!w || !docEditor) {
+            postSaveAsError('编辑器未就绪')
+            return
+        }
+        ensureX2tInjected()
+            .then(x2t => saveOfflineBuffer(w, x2t, format, null, 'onlyoffice-saveas'))
+            .catch(postSaveAsError)
+    }
+
+    function detectDocumentType(fileType) {
+        const normalized = (fileType || '').toLowerCase()
+        const cell = ['xls', 'xlsx', 'xlsm', 'xlt', 'xltx', 'xltm', 'ods', 'fods', 'csv']
+        const slide = ['ppt', 'pptx', 'pptm', 'pot', 'potx', 'potm', 'odp', 'fodp', 'pps', 'ppsx']
+        const pdf = ['pdf', 'oxps', 'xps']
+        if (cell.includes(normalized)) return 'cell'
+        if (slide.includes(normalized)) return 'slide'
+        if (pdf.includes(normalized)) return 'pdf'
+        return 'word'
+    }
+
+    function detectFileTypeFromUrl(url) {
+        if (!url) return ''
+        const clean = url.split('?')[0].split('#')[0]
+        const dot = clean.lastIndexOf('.')
+        return dot > -1 ? clean.substring(dot + 1).toLowerCase() : ''
+    }
+
+    function hashCode(value) {
+        let hash = 0
+        for (let index = 0; index < value.length; index += 1) {
+            hash = (hash << 5) - hash + value.charCodeAt(index)
+            hash |= 0
+        }
+        return hash
+    }
+
+    function normalizeConfig(docConfig) {
+        const config = docConfig || {}
+        config.document = config.document || {}
+        // api.js 对 document.fileType 有白名单正则校验（不含 bin 等 SER 原生格式），
+        // 非法值会 alert 并直接中断（iframe 不创建）。SER bin 是编辑器内核原生格式，
+        // 离线打开时按 word(docx) 提交给 api.js；真实字节的转换扩展名记在
+        // __originalFileType，openPendingBinaryDocument 里仍按 bin 直通。
+        if (config.document.fileType === 'bin') {
+            config.document.__originalFileType = 'bin'
+            config.document.fileType = 'docx'
+        }
+        if (!config.document.fileType) {
+            config.document.fileType = detectFileTypeFromUrl(config.document.url)
+        }
+        if (!config.documentType) {
+            config.documentType = detectDocumentType(config.document.fileType)
+        }
+        if (!config.document.key) {
+            config.document.key = 'doc-' + Math.abs(hashCode(
+                `${config.document.url || ''}|${config.document.title || ''}`
+            ))
+        }
+        if (!config.document.title) {
+            config.document.title = `文档.${config.document.fileType || 'docx'}`
+        }
+        if (!config.document.directUrl && config.document.url) {
+            config.document.directUrl = config.document.url
+        }
+        if (config.height == null) config.height = '100%'
+        if (config.width == null) config.width = '100%'
+        return config
+    }
+
+    function configureBinaryOpen(config, openBuffer) {
+        pendingOpenBuffer = null
+        pendingOpenFileExt = null
+        if (!config.localOpenFromBinary) return
+        if (!openBuffer) throw new Error('本地文档缺少二进制内容')
+        pendingOpenBuffer = openBuffer
+        pendingOpenFileExt = (config.document && (config.document.__originalFileType || config.document.fileType)) || null
+    }
+
+    function loadOnlyoffice(docConfig, openBuffer) {
+        if (docEditor) {
+            docEditor.destroyEditor()
+            x2tState = null    // 新 iframe = 全新 window，x2t 注入状态必须重置
+        }
+        pendingSave = null
+        pendingMediaMap = null
+        streamFallback = docConfig && docConfig.streamFallback || 'autosave'
+        if (docConfig) delete docConfig.streamFallback
+        const config = normalizeConfig(docConfig)
+        // 记录当前文档标题（保存时用于生成文件名）
+        currentTitle = config.document && config.document.title || 'document'
+        // 离线：url 置 '_offline_' 触发 sdk 原生 OfflineApp，跳过协同 socket 握手
+        if (config.localOpenFromBinary) {
+            config.document.url = '_offline_'
+        }
+        configureBinaryOpen(config, openBuffer)
+        config.events = config.events || {}
+        config.events.onAppReady = onAppReady
+        config.events.onDocumentReady = onDocumentReady
+        config.events.onDownloadAs = function () {}
+        config.events.onError = onEditorError
+        config.events.onRequestClose = onRequestClose
+        config.events.onDocumentStateChange = onDocStateChange
+        config.events.onMetaChange = onMetaChange
+        config.events.onRequestRename = onRequestRename
+        config.events.onRequestSaveAs = onRequestSaveAs
+        docEditor = new DocsAPI.DocEditor('editor', config)
+    }
+
+    function getUrlParams() {
+        const params = {}
+        new URLSearchParams(window.location.search).forEach((value, key) => {
+            params[key] = value
+        })
+        return params
+    }
+
+    function handleMessage(event) {
+        const data = event.data
+        if (!data) return
+        if (data.type === 'onlyoffice-config' && data.docConfig) {
+            const config = typeof data.docConfig === 'string' ? JSON.parse(data.docConfig) : data.docConfig
+            try {
+                loadOnlyoffice(config, data.openBuffer)
+            } catch (error) {
+                postOpenError(error)
+                throw error
+            }
+            return
+        }
+        if (data.type === 'onlyoffice-save') {
+            handleSaveCommand(data)
+            return
+        }
+        if (data.type === 'onlyoffice-file-stream') {
+            handleFileStream(data)
+        }
+    }
+
+    function init() {
+        if (typeof DocsAPI === 'undefined') {
+            alert('锐小招 API 未加载，请检查文档服务器地址')
+            return
+        }
+        const params = getUrlParams()
+        if (params.docConfig) {
+            loadOnlyoffice(JSON.parse(params.docConfig))
+            return
+        }
+        postToParent({ type: 'onlyoffice-ready' })
+    }
+
+    window.addEventListener('message', handleMessage)
+    window.addEventListener('load', init)
+</script>
+</body>
+</html>

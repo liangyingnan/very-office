@@ -1,0 +1,16 @@
+# IDE
+.idea/
+*.iml
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Node / 构建
+node_modules/
+dist/
+deploy/
+
+# 嵌套 git 仓库元数据（不应提交）
+.git/
