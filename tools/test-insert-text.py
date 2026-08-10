@@ -45,7 +45,7 @@ async def main():
             await page.wait_for_timeout(500)
         assert frame, '编辑器 iframe 未出现'
         for _ in range(180):
-            ready = await frame.evaluate("!!(window.Asc && window.Asc.editor && window.Asc.editor.WordControl && window.Asc.editor.WordControl.m_oLogicDocument)")
+            ready = await frame.evaluate("!!(window.Asc && window.Asc.editor && window.Asc.editor.WordControl && window.Asc.editor.WordControl.m_oLogicDocument && window.__ooRealBytesInjected)")
             if ready:
                 break
             await page.wait_for_timeout(500)

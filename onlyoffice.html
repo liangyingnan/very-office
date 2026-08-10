@@ -223,6 +223,9 @@
                 }
                 // serBin 是 iframe realm 的 Uint8Array → 转 ArrayBuffer 供 api.js transfer
                 docEditor.openDocument({ buffer: toHostArrayBuffer(serBin) })
+                // 标记真实字节注入完成：注入前的编辑会在 openDocument 重建文档时丢失，
+                // 自动化测试/宿主集成应等待该标记再交互
+                try { w.__ooRealBytesInjected = true } catch (e) {}
             })
             .catch(error => {
                 postOpenError(error)

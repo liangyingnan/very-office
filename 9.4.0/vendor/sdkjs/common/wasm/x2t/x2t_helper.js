@@ -759,6 +759,14 @@
             'doc': 'docx',
             'xls': 'xlsx',
             'ppt': 'pptx',
+            // 文本类先转 v10 docx 再转 bin（直接 txt→bin 产出 v5 旧版 SER，9.4 内核解析不出内容）
+            'txt': 'docx',
+            'rtf': 'docx',
+            'odt': 'docx',
+            'epub': 'docx',
+            'fodt': 'docx',
+            'ott': 'docx',
+            'wps': 'docx',
         }
         const targetExt = convertMap[fileExt];
         if (targetExt) {
@@ -861,6 +869,14 @@
         return this.initialize().then(function () {
             return handleFileData(binary);
         }).then(function (uint8Array) {
+            // 无 BOM 的 UTF-8 纯汉字 txt 会被 x2t 误判编码导致内容丢失，强制补 UTF-8 BOM
+            if (fileExt.toLowerCase() === '.txt' && uint8Array
+                && !(uint8Array[0] === 0xEF && uint8Array[1] === 0xBB && uint8Array[2] === 0xBF)) {
+                var withBom = new Uint8Array(uint8Array.length + 3);
+                withBom.set([0xEF, 0xBB, 0xBF]);
+                withBom.set(uint8Array, 3);
+                uint8Array = withBom;
+            }
             return new Promise(async function (resolve, reject) {
                 try {
                     await self.writeMediaFiles(medias);

@@ -41,7 +41,7 @@ if (pathnameParts.length > 1 && pathnameParts[pathnameParts.length - 2]) {
 	g_version = pathnameParts[pathnameParts.length - 2];
 }
 const g_cacheNamePrefix = 'document_editor_static_';
-const g_cacheName = g_cacheNamePrefix + g_version + '_v6';
+const g_cacheName = g_cacheNamePrefix + g_version + '_v10';
 const g_cacheablePrefixes = [
 	"web-apps/",
 	"sdkjs/",
@@ -59,7 +59,7 @@ const STORAGE_INFO_CACHE_DURATION = 30000; // 30 seconds
 // TTL-based invalidation: all files for a docid are evicted after docIdTTL from first cache.
 // Timestamp stored in X-Cache-Time response header (no separate metadata cache needed).
 const g_fifoCachePrefix = 'document_editor_dynamic_';
-const g_fifoCacheName = g_fifoCachePrefix + g_version + '_v6';
+const g_fifoCacheName = g_fifoCachePrefix + g_version + '_v10';
 const g_fifoPrefix = 'cache/files/data/';
 const g_fifoDocIdParams = ['shardkey', 'WOPISrc'];
 const g_fifoCacheTimeHeader = 'X-Cache-Time';

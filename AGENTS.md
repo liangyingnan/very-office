@@ -81,8 +81,19 @@ very-office/
 
 ### 1. sdkjs（可选重建）
 - 已随仓库携带预编译 `sdkjs/word/sdk-all-min.js` 等，离线转换引擎 `common/wasm/x2t/` 已就位，**通常无需重建**。
-- 如需从源码重构建：`cd 9.4.0/vendor/sdkjs/build && python build.py`（仅文件拼接，需 Python 3）。
-  产物在 `sdkjs/deploy/sdkjs/`，按需同步回 `vendor/sdkjs/`（注意不要覆盖 `common/wasm/x2t/`） 。
+- vendor 下的 `sdkjs/` 只含构建产物（无源码树）；源码与构建脚本在 `F:\JsWorkSpace\DocumentServer\sdkjs\`
+  （v9.4.0.131 + 本项目离线修复）。重建：`cd F:\JsWorkSpace\DocumentServer\sdkjs\build && python build.py`
+  （仅文件拼接，需 Python 3），产物在 `DocumentServer/sdkjs/deploy/sdkjs/`。
+- **`sdk-all.js` 同步规则**：只允许同步 `sdk-all.js`（内核层）。DocumentServer 源码上叠了本项目的离线修复
+  （`DocumentProtection.js` 恢复 CDocProtect.Write/Read_ToBinary2 + `HistoryCommon.js` 新增
+  `historyitem_type_DocumentProtection = 74<<16`、`custom-xml-manager.js` 补 Write_ToBinary2 占位、
+  `InsertDocumentFile.js` 插入文本离线分支），从官方干净源码重建会丢这些修复。
+- **重要**：`vendor/sdkjs/<word|cell|slide|visio>/sdk-all-min.js` 尾部追加了离线 shim
+  （getEmpty 空文档 bin + fetchFonts 字体喂给 wasm + 本地许可/compareVersions 包装 +
+  asc_openDocumentFromBytes 的 History 重置）。
+  任何时候用"干净"的 sdk-all-min.js 覆盖它们（如同步 deploy 产物、从 DocumentServer 重拷贝），
+  都必须重跑 `python tools/inject-9.4.0-offline-shim.py`（幂等）恢复 shim，
+  否则会出现"许可证过期"弹窗、新建文档失败、转换缺字体、重开文档崩溃。
 
 ### 2. web-apps（必须构建）
 - 纯源码，需 Grunt 构建：
@@ -139,6 +150,11 @@ python -m http.server 8000     # 必须用 http 服务，禁止 file://
 
 - **不要修改 `F:\JsWorkSpace\OnlyofficePersonal` 中的代码**——它仅作为只读参考/已知可用的成品基线。
 - 版本对齐：`sdkjs` / `web-apps` 为 9.4.0.131；内置 `x2t.wasm` 已是 9.4，无需强行对齐到 CryptPad 的 9.3.0.140。
+- **替换 `9.4.0/vendor/` 下任何静态资源（尤其是 `sdkjs/common/wasm/x2t/`）后，必须同步把
+  `9.4.0/vendor/document_editor_service_worker.js` 中 `g_cacheName` / `g_fifoCacheName` 的 `_vN`
+  后缀 +1**（当前为 `_v10`）。否则 Service Worker 会继续服务旧缓存，可能出现新旧文件混搭
+  （如旧 `x2t.js` + 新 `x2t.wasm` 导致的 `Import #0 "a"` wasm 实例化错误）。客户端首次仍需
+  在 DevTools → Application → Storage → Clear site data 后硬刷新一次。
 
 ## 参考
 

@@ -74772,3 +74772,77 @@ function CSpellchecker(settings)
 		window['AscCommonExcel'].getGraphics = getGraphics;
 	})(window);
 
+
+;(function(){var w=window;
+try{
+if(!w.AscCommon||w.AscCommon.fetchFonts)return;
+var KEY=[160,102,214,32,20,150,71,250,149,105,184,80,176,65,73,72];
+var STYLES=[['indexR',''],['indexB','_Bold'],['indexBI','_Bold_Italic'],['indexI','_Italic']];
+var cache=w.__ooFontCache||(w.__ooFontCache={});
+w.AscCommon.fetchFonts=function(cb){
+    var loader=w.AscCommon.g_font_loader;
+    var files=loader&&loader.fontFiles;
+    var infos=loader&&loader.fontInfos;
+    var base=(loader&&loader.fontFilesPath)||'../../../../fonts/';
+    if(!files||!infos){if(cb)cb([]);return;}
+    var out=[],pending=0;
+    function done(){if(--pending===0&&cb){cb(out)}}
+    function load(url,name){
+        pending++;
+        var xhr=new XMLHttpRequest();
+        xhr.open('GET',url,true);
+        if(typeof ArrayBuffer!=='undefined'&&!w.opera){xhr.responseType='arraybuffer'}
+        xhr.onload=function(){
+            if(this.status!==200||!this.response){done();return}
+            var bytes=new Uint8Array(this.response);
+            for(var i=0;i<32&&i<bytes.length;i++){bytes[i]^=KEY[i%16]}
+            cache[name]=bytes;
+            out.push({fileName:name,binary:bytes});
+            done();
+        };
+        xhr.onerror=function(){done()};
+        xhr.send(null);
+    }
+    for(var i=0;i<infos.length;i++){
+        var info=infos[i];
+        if(!info)continue;
+        for(var s=0;s<STYLES.length;s++){
+            var idx=info[STYLES[s][0]];
+            if(typeof idx!=='number'||idx<0||!files[idx])continue;
+            var fileId=(files[idx].Id!==undefined)?files[idx].Id:files[idx];
+            if(!fileId)continue;
+            var name=info.Name+STYLES[s][1]+'.ttf';
+            if(cache[name]){out.push({fileName:name,binary:cache[name]});continue}
+            load(base+fileId,name);
+        }
+    }
+    if(pending===0&&cb){cb(out)}
+};
+w.AscCommon.fetchFonts.__ooFetchFontsPatched=true;
+}catch(e){console.error('[oo] fetchFonts shim error',e)}})();
+
+
+;(function(){var w=window;
+if(!w.compareVersions){w.compareVersions=true}
+try{
+var B=w.AscCommon&&w.AscCommon.baseEditorsApi&&w.AscCommon.baseEditorsApi.prototype;
+if(B&&!B.__ooOfflineLicensePatched){B.__ooOfflineLicensePatched=true;
+var orig=B._onEndPermissions;
+B._onEndPermissions=function(){
+if(this.isOnLoadLicense&&null===this.licenseResult){
+this.licenseResult={type:3,rights:1,branding:false,customization:false,light:false,mode:0,buildVersion:'9.4.0',buildNumber:1};}
+return orig.apply(this,arguments)};}
+}catch(e){console.error('[oo] offline license shim error',e)}})();
+
+
+;(function(){var w=window;
+try{
+var B=w.AscCommon&&w.AscCommon.baseEditorsApi&&w.AscCommon.baseEditorsApi.prototype;
+if(B&&!B.__ooHistoryResetPatched){B.__ooHistoryResetPatched=true;
+var origOpen=B.asc_openDocumentFromBytes;
+B.asc_openDocumentFromBytes=function(){
+try{var H=w.AscCommon&&w.AscCommon.History;
+if(H){H.TurnOffHistory=0;H.RegisterClasses=0;H.Index=-1;H.RecIndex=-1;H.SavedIndex=null;H.Points=[];}}catch(e){}
+return origOpen.apply(this,arguments)};}
+}catch(e){console.error('[oo] history reset shim error',e)}})();
+

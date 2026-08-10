@@ -97,6 +97,25 @@ return orig.apply(this,arguments)};}
 }catch(e){console.error('[oo] offline license shim error',e)}})();
 """
 
+# ---------------------------------------------------------------------------
+# History 重置补丁：离线"先开空文档、后注入真实字节"会在同一 api 实例里二次
+# openDocument；上游假定 openDocument 时 History.Index === -1（CanAddChanges=false），
+# 否则 InitEditor 重建 CDocument 时会把默认样式/文档保护等注册变更序列化进历史，
+# 触发 Write_ToBinary2 缺失/undefined 成员等一连串上游潜在崩溃。
+# 在共用入口 asc_openDocumentFromBytes 前重置 History 到全新文档状态。
+# ---------------------------------------------------------------------------
+HISTORY_RESET_SHIM = """;(function(){var w=window;
+try{
+var B=w.AscCommon&&w.AscCommon.baseEditorsApi&&w.AscCommon.baseEditorsApi.prototype;
+if(B&&!B.__ooHistoryResetPatched){B.__ooHistoryResetPatched=true;
+var origOpen=B.asc_openDocumentFromBytes;
+B.asc_openDocumentFromBytes=function(){
+try{var H=w.AscCommon&&w.AscCommon.History;
+if(H){H.TurnOffHistory=0;H.RegisterClasses=0;H.Index=-1;H.RecIndex=-1;H.SavedIndex=null;H.Points=[];}}catch(e){}
+return origOpen.apply(this,arguments)};}
+}catch(e){console.error('[oo] history reset shim error',e)}})();
+"""
+
 
 def has_marker(path, marker):
     try:
@@ -209,6 +228,13 @@ def main():
             changed = True
         else:
             print('  - license shim 已存在，跳过')
+
+        if not has_marker(target, '__ooHistoryResetPatched'):
+            inject(target, '\n' + HISTORY_RESET_SHIM + '\n')
+            print('  + history reset shim')
+            changed = True
+        else:
+            print('  - history reset shim 已存在，跳过')
 
         if changed:
             rebuild_compressed(target)
