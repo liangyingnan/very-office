@@ -10,6 +10,10 @@ async def main():
     errors = []
     downloadas = []
 
+    # 夹具自包含：与 test-insert-text.py 保持一致的期望内容（该文件可能被手工改動）
+    with open(TXT, 'w', encoding='utf-8') as f:
+        f.write('离线插入文本测试行 1\n离线插入文本测试行 2\n锐小招 offline insert test')
+
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, executable_path=r'C:\Program Files\Google\Chrome\Application\chrome.exe')
         page = await browser.new_page(viewport={'width': 1440, 'height': 900})

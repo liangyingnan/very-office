@@ -780,7 +780,87 @@
         return null;
     };
 
-    X2TConverter.prototype.fetchFonts = async function () {
+    // ---------------------------------------------------------------------------
+    // 按需字体：x2t 只有「OOXML → SER bin」（打开文档，算排版度量）和 PDF 输入/输出
+    // 需要字体文件。全量字体约 400MB，首次打开全抓一遍要十几秒甚至更久。
+    // 打开时从源 zip（docx/xlsx/pptx）解析文档实际引用的字体名，只喂这几个；
+    // bin → docx/xlsx/pptx 等文本类输出不引用字体二进制，直接跳过（已验证产物合法）。
+    // ---------------------------------------------------------------------------
+    var OO_ALWAYS_FONTS = ['Calibri', 'Cambria', 'Calibri Light', 'Arial', 'Times New Roman',
+        '宋体', 'SimSun', '等线', 'DengXian', '微软雅黑', 'Microsoft YaHei',
+        '黑体', 'SimHei', '楷体', 'KaiTi', '仿宋', 'FangSong'];
+
+    function ooU16(b, o) { return b[o] | (b[o + 1] << 8); }
+    function ooU32(b, o) { return (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) >>> 0; }
+
+    // 读 zip 中央目录，把 wanted 命中的条目解压成文本交给 cb（仅 store/deflate，OOXML 足够）
+    async function ooReadZipXmlTexts(bytes, wanted, cb) {
+        if (!bytes || bytes.length < 22 || typeof DecompressionStream === 'undefined') return;
+        var eocd = -1;
+        for (var i = bytes.length - 22; i >= 0 && i >= bytes.length - 22 - 66000; i--) {
+            if (ooU32(bytes, i) === 0x06054b50) { eocd = i; break; }
+        }
+        if (eocd < 0) return;
+        var count = ooU16(bytes, eocd + 10);
+        var p = ooU32(bytes, eocd + 16);
+        var decoder = new TextDecoder('utf-8');
+        for (var n = 0; n < count && p + 46 <= bytes.length; n++) {
+            if (ooU32(bytes, p) !== 0x02014b50) break;
+            var method = ooU16(bytes, p + 10);
+            var csize = ooU32(bytes, p + 20);
+            var nameLen = ooU16(bytes, p + 28);
+            var extraLen = ooU16(bytes, p + 30);
+            var commentLen = ooU16(bytes, p + 32);
+            var localOff = ooU32(bytes, p + 42);
+            var name = decoder.decode(bytes.subarray(p + 46, p + 46 + nameLen));
+            p += 46 + nameLen + extraLen + commentLen;
+            if (!wanted(name)) continue;
+            if (localOff + 30 > bytes.length || ooU32(bytes, localOff) !== 0x04034b50) continue;
+            var dataOff = localOff + 30 + ooU16(bytes, localOff + 26) + ooU16(bytes, localOff + 28);
+            if (dataOff + csize > bytes.length) continue;
+            var raw = bytes.subarray(dataOff, dataOff + csize);
+            try {
+                if (method === 8) {
+                    var buf = await new Response(
+                        new Blob([raw]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer();
+                    cb(name, decoder.decode(buf));
+                } else if (method === 0) {
+                    cb(name, decoder.decode(raw));
+                }
+            } catch (e) { /* 单个条目失败不影响其它条目 */ }
+        }
+    }
+
+    // 从 OOXML zip 中解析文档引用的字体名（fontTable / theme / styles / 正文 rPr），
+    // 并集上常用兜底字体；解析失败返回兜底集合，调用方再决定是否降级为全量
+    X2TConverter.prototype.extractUsedFonts = async function (bytes, fileExt) {
+        var ext = (fileExt || '').toLowerCase().replace('.', '');
+        var wanted = null;
+        if (ext === 'docx') {
+            wanted = function (n) {
+                return n === 'word/fontTable.xml' || n === 'word/styles.xml'
+                    || n === 'word/document.xml' || n === 'word/theme/theme1.xml';
+            };
+        } else if (ext === 'xlsx') {
+            wanted = function (n) { return n === 'xl/styles.xml' || n === 'xl/theme/theme1.xml'; };
+        } else if (ext === 'pptx') {
+            wanted = function (n) { return /^ppt\/(theme|slides|slideMasters|slideLayouts)\/.+\.xml$/.test(n); };
+        }
+        var found = {};
+        if (wanted) {
+            await ooReadZipXmlTexts(bytes, wanted, function (name, text) {
+                var m;
+                var re1 = /(?:w:name|w:ascii|w:hAnsi|w:eastAsia|w:cs|typeface)="([^"+][^"]*)"/g;
+                while ((m = re1.exec(text))) { found[m[1]] = 1; }
+                var re2 = /<name val="([^"+][^"]*)"/g;
+                while ((m = re2.exec(text))) { found[m[1]] = 1; }
+            });
+        }
+        OO_ALWAYS_FONTS.forEach(function (f) { found[f] = 1; });
+        return Object.keys(found);
+    };
+
+    X2TConverter.prototype.fetchFonts = async function (fontNames) {
         let that = this;
         return new Promise(function (resolve, reject) {
             window["AscCommon"]['fetchFonts'](function (data) {
@@ -794,7 +874,7 @@
                 } catch (error) {
                     reject(error);
                 }
-            });
+            }, fontNames);
         });
     };
 
@@ -880,7 +960,21 @@
             return new Promise(async function (resolve, reject) {
                 try {
                     await self.writeMediaFiles(medias);
-                    await self.fetchFonts();
+                    var targetLower = targetExt.toLowerCase();
+                    if (targetLower === '.bin') {
+                        // 打开文档：只喂文档实际引用的字体（全量 ~400MB 首开要抓十几秒）
+                        var usedFonts = null;
+                        try {
+                            usedFonts = await self.extractUsedFonts(uint8Array, fileExt);
+                        } catch (e) {
+                            usedFonts = null; // 解析失败降级为全量
+                        }
+                        await self.fetchFonts(usedFonts);
+                    } else if (targetLower === '.pdf' || fileExt.toLowerCase() === 'pdf') {
+                        // PDF 输入/输出需要完整字体渲染字形
+                        await self.fetchFonts();
+                    }
+                    // bin → docx/xlsx/pptx 等文本类输出不引用字体二进制，跳过字体加载
                     var sanitizedName = self.sanitizeFileName(fileName);
                     var workspace = `/working/`;
                     var inputPath = workspace + sanitizedName + fileExt;

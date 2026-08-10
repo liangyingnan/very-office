@@ -89,11 +89,23 @@ very-office/
   `historyitem_type_DocumentProtection = 74<<16`、`custom-xml-manager.js` 补 Write_ToBinary2 占位、
   `InsertDocumentFile.js` 插入文本离线分支），从官方干净源码重建会丢这些修复。
 - **重要**：`vendor/sdkjs/<word|cell|slide|visio>/sdk-all-min.js` 尾部追加了离线 shim
-  （getEmpty 空文档 bin + fetchFonts 字体喂给 wasm + 本地许可/compareVersions 包装 +
-  asc_openDocumentFromBytes 的 History 重置）。
+  （getEmpty 空文档 bin + fetchFonts 字体喂给 wasm〔支持按需过滤，见下〕+ 本地许可/compareVersions 包装 +
+  asc_openDocumentFromBytes 的 History 重置 + isDocumentLoadComplete 复位 + saveChanges 离线假完成）。
   任何时候用"干净"的 sdk-all-min.js 覆盖它们（如同步 deploy 产物、从 DocumentServer 重拷贝），
   都必须重跑 `python tools/inject-9.4.0-offline-shim.py`（幂等）恢复 shim，
-  否则会出现"许可证过期"弹窗、新建文档失败、转换缺字体、重开文档崩溃。
+  否则会出现"许可证过期"弹窗、新建文档失败、转换缺字体、重开文档崩溃、注入后不重排（空白）、
+  状态栏"正在保存文档..."常驻。
+- **重开重排修复（2026-08-10）**：离线"先开空文档、后注入真实字节"在同一 api 实例二次
+  openDocument；首开后 `isDocumentLoadComplete=true`，`_openDocumentEndCallback` 开头 guard
+  直接 return → 注入的文档不做 RecalculateFromStart、不发 asc_onDocumentContentReady，
+  画面空白直到用户输入触发重排。shim 在 asc_openDocumentFromBytes 前复位该标志（标记
+  `__ooReopenRecalcPatched`）。
+- **按需字体（2026-08-10）**：x2t 转换的全量字体约 400MB/273 个文件，首次打开文档要全抓一遍
+  （本地 16s+，表现为"打开后长时间空白"）。现改为：打开（→bin）时 `x2t_helper.js` 从源 zip
+  （docx fontTable/theme/styles/document、xlsx styles、pptx typeface）解析文档实际引用的字体名，
+  并集常用兜底字体后经 `AscCommon.fetchFonts(cb, filter)` 只抓这几个（典型 <30MB/<2s）；
+  bin→docx/xlsx/pptx 等文本类输出不引用字体二进制，**完全跳过**字体加载；
+  PDF 输入/输出仍全量（渲染字形需要）。解析失败自动降级为全量。
 
 ### 2. web-apps（必须构建）
 - 纯源码，需 Grunt 构建：
@@ -152,7 +164,7 @@ python -m http.server 8000     # 必须用 http 服务，禁止 file://
 - 版本对齐：`sdkjs` / `web-apps` 为 9.4.0.131；内置 `x2t.wasm` 已是 9.4，无需强行对齐到 CryptPad 的 9.3.0.140。
 - **替换 `9.4.0/vendor/` 下任何静态资源（尤其是 `sdkjs/common/wasm/x2t/`）后，必须同步把
   `9.4.0/vendor/document_editor_service_worker.js` 中 `g_cacheName` / `g_fifoCacheName` 的 `_vN`
-  后缀 +1**（当前为 `_v10`）。否则 Service Worker 会继续服务旧缓存，可能出现新旧文件混搭
+  后缀 +1**（当前为 `_v15`）。否则 Service Worker 会继续服务旧缓存，可能出现新旧文件混搭
   （如旧 `x2t.js` + 新 `x2t.wasm` 导致的 `Import #0 "a"` wasm 实例化错误）。客户端首次仍需
   在 DevTools → Application → Storage → Clear site data 后硬刷新一次。
 

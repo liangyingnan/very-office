@@ -74772,19 +74772,25 @@ function CSpellchecker(settings)
 		window['AscCommonExcel'].getGraphics = getGraphics;
 	})(window);
 
-
 ;(function(){var w=window;
 try{
 if(!w.AscCommon||w.AscCommon.fetchFonts)return;
 var KEY=[160,102,214,32,20,150,71,250,149,105,184,80,176,65,73,72];
 var STYLES=[['indexR',''],['indexB','_Bold'],['indexBI','_Bold_Italic'],['indexI','_Italic']];
 var cache=w.__ooFontCache||(w.__ooFontCache={});
-w.AscCommon.fetchFonts=function(cb){
+// filter（可选）：字体名数组，只加载这些字体（x2t_helper 打开文档时按需传入，
+// 避免全量 ~400MB 字体首开全抓一遍）；不传则全量（PDF 导出等场景）
+w.AscCommon.fetchFonts=function(cb,filter){
     var loader=w.AscCommon.g_font_loader;
     var files=loader&&loader.fontFiles;
     var infos=loader&&loader.fontInfos;
     var base=(loader&&loader.fontFilesPath)||'../../../../fonts/';
     if(!files||!infos){if(cb)cb([]);return;}
+    var filterSet=null;
+    if(filter&&filter.length){
+        filterSet={};
+        for(var f=0;f<filter.length;f++){filterSet[String(filter[f]).toLowerCase()]=1;}
+    }
     var out=[],pending=0;
     function done(){if(--pending===0&&cb){cb(out)}}
     function load(url,name){
@@ -74806,6 +74812,7 @@ w.AscCommon.fetchFonts=function(cb){
     for(var i=0;i<infos.length;i++){
         var info=infos[i];
         if(!info)continue;
+        if(filterSet&&!filterSet[String(info.Name||'').toLowerCase()])continue;
         for(var s=0;s<STYLES.length;s++){
             var idx=info[STYLES[s][0]];
             if(typeof idx!=='number'||idx<0||!files[idx])continue;
@@ -74819,6 +74826,7 @@ w.AscCommon.fetchFonts=function(cb){
     if(pending===0&&cb){cb(out)}
 };
 w.AscCommon.fetchFonts.__ooFetchFontsPatched=true;
+w.AscCommon.fetchFonts.__ooFetchFontsFilter=true;
 }catch(e){console.error('[oo] fetchFonts shim error',e)}})();
 
 
@@ -74834,15 +74842,27 @@ this.licenseResult={type:3,rights:1,branding:false,customization:false,light:fal
 return orig.apply(this,arguments)};}
 }catch(e){console.error('[oo] offline license shim error',e)}})();
 
-
 ;(function(){var w=window;
 try{
 var B=w.AscCommon&&w.AscCommon.baseEditorsApi&&w.AscCommon.baseEditorsApi.prototype;
-if(B&&!B.__ooHistoryResetPatched){B.__ooHistoryResetPatched=true;
+if(B&&!B.__ooHistoryResetPatched){B.__ooHistoryResetPatched=true;B.__ooReopenRecalcPatched=true;
 var origOpen=B.asc_openDocumentFromBytes;
 B.asc_openDocumentFromBytes=function(){
 try{var H=w.AscCommon&&w.AscCommon.History;
 if(H){H.TurnOffHistory=0;H.RegisterClasses=0;H.Index=-1;H.RecIndex=-1;H.SavedIndex=null;H.Points=[];}}catch(e){}
+try{this.isDocumentLoadComplete=false;}catch(e){}
 return origOpen.apply(this,arguments)};}
 }catch(e){console.error('[oo] history reset shim error',e)}})();
+
+
+;(function(){var w=window;
+try{
+var C=w.AscCommon&&w.AscCommon.CDocsCoApi&&w.AscCommon.CDocsCoApi.prototype;
+if(C&&!C.__ooOfflineSavePatched){C.__ooOfflineSavePatched=true;
+var origSave=C.saveChanges;
+C.saveChanges=function(){
+var r=origSave.apply(this,arguments);
+try{if(!(this._CoAuthoringApi&&this._onlineWork)){var t=this;setTimeout(function(){t.callback_OnUnSaveLock();},100);}}catch(e){}
+return r;};}
+}catch(e){console.error('[oo] offline save shim error',e)}})();
 

@@ -2,8 +2,9 @@
 """inject-9.4.0-offline-shim.py — 为 9.4.0 sdk-all-min.js 注入离线支撑 shim（幂等）
 
 功能：
-  1. AscCommon.fetchFonts —— x2t_helper.convertFromBin 转换时向 wasm MEMFS 提供字体
-     （XHR 拉取 vendor/fonts/<id>，按 16 字节密钥 XOR 解密前 32 字节）
+  1. AscCommon.fetchFonts —— x2t_helper 转换时向 wasm MEMFS 提供字体
+     （XHR 拉取 vendor/fonts/<id>，按 16 字节密钥 XOR 解密前 32 字节；
+     支持可选 filter 字体名数组按需加载，避免全量 ~400MB 首开全抓）
   2. visio 额外注入 compareVersions + 本地许可补丁（word/cell/slide 已有）
   3. 重建 .br / .gz 压缩产物
 
@@ -38,12 +39,19 @@ if(!w.AscCommon||w.AscCommon.fetchFonts)return;
 var KEY=[160,102,214,32,20,150,71,250,149,105,184,80,176,65,73,72];
 var STYLES=[['indexR',''],['indexB','_Bold'],['indexBI','_Bold_Italic'],['indexI','_Italic']];
 var cache=w.__ooFontCache||(w.__ooFontCache={});
-w.AscCommon.fetchFonts=function(cb){
+// filter（可选）：字体名数组，只加载这些字体（x2t_helper 打开文档时按需传入，
+// 避免全量 ~400MB 字体首开全抓一遍）；不传则全量（PDF 导出等场景）
+w.AscCommon.fetchFonts=function(cb,filter){
     var loader=w.AscCommon.g_font_loader;
     var files=loader&&loader.fontFiles;
     var infos=loader&&loader.fontInfos;
     var base=(loader&&loader.fontFilesPath)||'../../../../fonts/';
     if(!files||!infos){if(cb)cb([]);return;}
+    var filterSet=null;
+    if(filter&&filter.length){
+        filterSet={};
+        for(var f=0;f<filter.length;f++){filterSet[String(filter[f]).toLowerCase()]=1;}
+    }
     var out=[],pending=0;
     function done(){if(--pending===0&&cb){cb(out)}}
     function load(url,name){
@@ -65,6 +73,7 @@ w.AscCommon.fetchFonts=function(cb){
     for(var i=0;i<infos.length;i++){
         var info=infos[i];
         if(!info)continue;
+        if(filterSet&&!filterSet[String(info.Name||'').toLowerCase()])continue;
         for(var s=0;s<STYLES.length;s++){
             var idx=info[STYLES[s][0]];
             if(typeof idx!=='number'||idx<0||!files[idx])continue;
@@ -78,6 +87,7 @@ w.AscCommon.fetchFonts=function(cb){
     if(pending===0&&cb){cb(out)}
 };
 w.AscCommon.fetchFonts.__ooFetchFontsPatched=true;
+w.AscCommon.fetchFonts.__ooFetchFontsFilter=true;
 }catch(e){console.error('[oo] fetchFonts shim error',e)}})();
 """
 
@@ -103,17 +113,41 @@ return orig.apply(this,arguments)};}
 # 否则 InitEditor 重建 CDocument 时会把默认样式/文档保护等注册变更序列化进历史，
 # 触发 Write_ToBinary2 缺失/undefined 成员等一连串上游潜在崩溃。
 # 在共用入口 asc_openDocumentFromBytes 前重置 History 到全新文档状态。
+# 同时复位 isDocumentLoadComplete：首开后它为 true，_openDocumentEndCallback
+# （sdk-all-min.js 开头 guard）会直接 return，导致注入的文档不做 RecalculateFromStart、
+# 不发 asc_onDocumentContentReady —— 画面空白直到用户输入触发重排。
 # ---------------------------------------------------------------------------
 HISTORY_RESET_SHIM = """;(function(){var w=window;
 try{
 var B=w.AscCommon&&w.AscCommon.baseEditorsApi&&w.AscCommon.baseEditorsApi.prototype;
-if(B&&!B.__ooHistoryResetPatched){B.__ooHistoryResetPatched=true;
+if(B&&!B.__ooHistoryResetPatched){B.__ooHistoryResetPatched=true;B.__ooReopenRecalcPatched=true;
 var origOpen=B.asc_openDocumentFromBytes;
 B.asc_openDocumentFromBytes=function(){
 try{var H=w.AscCommon&&w.AscCommon.History;
 if(H){H.TurnOffHistory=0;H.RegisterClasses=0;H.Index=-1;H.RecIndex=-1;H.SavedIndex=null;H.Points=[];}}catch(e){}
+try{this.isDocumentLoadComplete=false;}catch(e){}
 return origOpen.apply(this,arguments)};}
 }catch(e){console.error('[oo] history reset shim error',e)}})();
+"""
+
+
+# ---------------------------------------------------------------------------
+# 离线保存假完成补丁：CDocsCoApi.saveChanges 在离线（无 _onlineWork）时什么都不做，
+# 服务器永远不会回 unSaveLock → _onSaveCallbackInner 里登记的 onUnSaveLock 不触发 →
+# sync_EndAction(Save) 不发，状态栏"正在保存文档..."常驻且 canSave 一直为 false。
+# 参照代码里已有的离线 dummy 写法（unSaveLock 的 callback_OnUnSaveLock setTimeout），
+# 离线分支补一个假完成回调，让保存状态机走完。
+# ---------------------------------------------------------------------------
+OFFLINE_SAVE_SHIM = """;(function(){var w=window;
+try{
+var C=w.AscCommon&&w.AscCommon.CDocsCoApi&&w.AscCommon.CDocsCoApi.prototype;
+if(C&&!C.__ooOfflineSavePatched){C.__ooOfflineSavePatched=true;
+var origSave=C.saveChanges;
+C.saveChanges=function(){
+var r=origSave.apply(this,arguments);
+try{if(!(this._CoAuthoringApi&&this._onlineWork)){var t=this;setTimeout(function(){t.callback_OnUnSaveLock();},100);}}catch(e){}
+return r;};}
+}catch(e){console.error('[oo] offline save shim error',e)}})();
 """
 
 
@@ -205,8 +239,8 @@ def main():
         else:
             with open(target, 'rb') as f:
                 raw = f.read()
-            if b'__ooFontCache' not in raw:
-                # 旧版 shim（无缓存）：删除文件末尾的旧 fetchFonts IIFE 后重注
+            if b'__ooFetchFontsFilter' not in raw:
+                # 旧版 shim（无按需过滤）：删除文件末尾的旧 fetchFonts IIFE 后重注
                 text = raw.decode('utf-8', errors='replace')
                 pos = text.rfind('__ooFetchFontsPatched')
                 start = text.rfind(';(function(){var w=window;', 0, pos)
@@ -215,7 +249,7 @@ def main():
                     with open(target, 'wb') as f:
                         f.write(text.encode('utf-8'))
                     inject(target, '\n' + FETCH_FONTS_SHIM + '\n')
-                    print('  ~ fetchFonts shim 更新（带缓存）')
+                    print('  ~ fetchFonts shim 更新（按需过滤）')
                     changed = True
                 else:
                     print('  - fetchFonts shim 定位失败，跳过')
@@ -233,8 +267,30 @@ def main():
             inject(target, '\n' + HISTORY_RESET_SHIM + '\n')
             print('  + history reset shim')
             changed = True
+        elif not has_marker(target, '__ooReopenRecalcPatched'):
+            # 旧版 history shim（无 isDocumentLoadComplete 复位）：删尾部旧 IIFE 后重注
+            with open(target, 'rb') as f:
+                text = f.read().decode('utf-8', errors='replace')
+            pos = text.rfind('__ooHistoryResetPatched')
+            start = text.rfind(';(function(){var w=window;', 0, pos)
+            if start > 0 and pos > start:
+                text = text[:start].rstrip() + '\n'
+                with open(target, 'wb') as f:
+                    f.write(text.encode('utf-8'))
+                inject(target, '\n' + HISTORY_RESET_SHIM + '\n')
+                print('  ~ history reset shim 更新（重开重排修复）')
+                changed = True
+            else:
+                print('  - history reset shim 定位失败，跳过')
         else:
-            print('  - history reset shim 已存在，跳过')
+            print('  - history reset shim 已是最新，跳过')
+
+        if not has_marker(target, '__ooOfflineSavePatched'):
+            inject(target, '\n' + OFFLINE_SAVE_SHIM + '\n')
+            print('  + offline save shim')
+            changed = True
+        else:
+            print('  - offline save shim 已存在，跳过')
 
         if changed:
             rebuild_compressed(target)

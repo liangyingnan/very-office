@@ -41,7 +41,7 @@ if (pathnameParts.length > 1 && pathnameParts[pathnameParts.length - 2]) {
 	g_version = pathnameParts[pathnameParts.length - 2];
 }
 const g_cacheNamePrefix = 'document_editor_static_';
-const g_cacheName = g_cacheNamePrefix + g_version + '_v10';
+const g_cacheName = g_cacheNamePrefix + g_version + '_v15';
 const g_cacheablePrefixes = [
 	"web-apps/",
 	"sdkjs/",
@@ -59,7 +59,7 @@ const STORAGE_INFO_CACHE_DURATION = 30000; // 30 seconds
 // TTL-based invalidation: all files for a docid are evicted after docIdTTL from first cache.
 // Timestamp stored in X-Cache-Time response header (no separate metadata cache needed).
 const g_fifoCachePrefix = 'document_editor_dynamic_';
-const g_fifoCacheName = g_fifoCachePrefix + g_version + '_v10';
+const g_fifoCacheName = g_fifoCachePrefix + g_version + '_v15';
 const g_fifoPrefix = 'cache/files/data/';
 const g_fifoDocIdParams = ['shardkey', 'WOPISrc'];
 const g_fifoCacheTimeHeader = 'X-Cache-Time';
@@ -293,14 +293,31 @@ function getStorageInfo() {
  * @param {number} attempt - Current attempt number (for retry logic)
  * @returns {Promise} Promise that resolves when caching completes or fails
  */
+// 同一 URL 的并发 put 会被 Chromium 拒绝（"Entry already exists"）：
+// 编辑器 FontLoader 与 x2t fetchFonts 会同时拉同一字体文件，插件 iframe 也会重复拉同一路径。
+// 用 in-flight 表按 URL 去重——内容相同，后者直接复用前者的写入结果即可。
+const g_inflightPuts = new Map();
 function putInCache(request, response, attempt) {
 	if (typeof attempt === 'undefined') attempt = 0;
+	const inflightKey = request.method + ' ' + request.url;
+	const inflight = g_inflightPuts.get(inflightKey);
+	if (inflight) return inflight;
+	const p = doPutInCache(request, response, attempt);
+	g_inflightPuts.set(inflightKey, p);
+	p.finally(function() {
+		if (g_inflightPuts.get(inflightKey) === p) g_inflightPuts.delete(inflightKey);
+	});
+	return p;
+}
+function doPutInCache(request, response, attempt) {
 	return caches.open(g_cacheName)
 		.then(function(cache) {
 			// Clone at the moment of caching so the provided response remains pristine for retries
 			return cache.put(request, response.clone());
 		})
 		.catch(function(err) {
+			// 并发put冲突（防御，正常已被 in-flight 去重拦截）：条目已存在即视为成功
+			if (err && String(err.message || err).indexOf('Entry already exists') !== -1) return;
 			// Transient quota/disk hiccup? Retry up to 2x with exponential back-off
 			if (attempt < 2) {
 				return new Promise(function(resolve) {
@@ -308,7 +325,7 @@ function putInCache(request, response, attempt) {
 				})
 				.then(function() {
 					// Reuse the original unconsumed response; a fresh clone will be created inside cache.put
-					return putInCache(request, response, attempt + 1);
+					return doPutInCache(request, response, attempt + 1);
 				});
 			} else {
 				const size = response.headers ? response.headers.get('content-length') : 'unknown';
@@ -331,7 +348,13 @@ function cacheFirst(event) {
 	// 导航请求（页面/iframe 的 index.html）用 network-first：网络可用时总是取最新版，
 	// 避免静态资源更新后浏览器/缓存仍返回旧 HTML（离线时回退缓存）
 	if (request.mode === 'navigate') {
+		// localhost 开发服务器瞬时抖动（重启/瞬时并发）偶发 Failed to fetch，
+		// 直接失败会杀死整个编辑器 iframe，这里延迟重试一次再回退缓存
 		return fetch(request)
+			.catch(function() {
+				return new Promise(function(resolve) { setTimeout(resolve, 800); })
+					.then(function() { return fetch(request); });
+			})
 			.then(function(networkResp) {
 				const responseForCache = networkResp.clone();
 				if (safeToCache(request, networkResp)) {
@@ -352,7 +375,13 @@ function cacheFirst(event) {
 				return networkResp;
 			})
 			.catch(function() {
-				return caches.match(request, { cacheName: g_cacheName });
+				return caches.match(request, { cacheName: g_cacheName })
+					.then(function(cached) {
+						// 无缓存且网络失败：返回显式错误页，避免 respondWith 拒绝
+						return cached || new Response(
+							'<!doctype html><meta charset="utf-8"><title>离线</title><h2>页面未缓存且网络不可用</h2>',
+							{ status: 503, statusText: 'Offline', headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+					});
 			});
 	}
 
@@ -394,6 +423,13 @@ function cacheFirst(event) {
 				}
 				return networkResp;
 			});
+		})
+		.catch(function(err) {
+			// 无缓存且网络失败：返回显式错误响应，避免 respondWith 拒绝
+			// （FetchEvent "resulted in a network error response" 未捕获 rejection）
+			console.error('SW fetch failed: ' + url + ' — ' + (err && (err.message || err)));
+			return new Response('Service Worker: fetch failed and no cache available',
+				{ status: 504, statusText: 'SW Fetch Failed', headers: { 'Content-Type': 'text/plain' } });
 		});
 }
 function activateWorker(event) {
