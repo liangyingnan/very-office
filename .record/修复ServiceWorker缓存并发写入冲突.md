@@ -24,7 +24,7 @@ the promise was rejected`（:368 未捕获）。
    "FetchEvent resulted in a network error"，iframe 导航可能失败。
    导航路径的 catch 里 `caches.match` 未命中时 resolve undefined，同样导致 network error。
 
-## 修复（`9.4.0/vendor/document_editor_service_worker.js`）
+## 修复（`../9.4.0.131/vendor/document_editor_service_worker.js`）
 
 - `putInCache` 增加 in-flight 表（`method + url` → Promise）按 URL 去重：同 URL 的并发写
   直接复用在途写入（内容相同）；另对 `Entry already exists` 错误静默视为成功（防御）。

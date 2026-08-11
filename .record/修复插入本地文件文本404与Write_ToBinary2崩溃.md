@@ -55,7 +55,7 @@
 ### 3. 构建与同步
 
 ```bash
-cd 9.4.0/vendor/sdkjs/build && python build.py        # 构建全部四个产品
+cd 9.4.0.131/vendor/sdkjs/build && python build.py        # 构建全部四个产品
 # 同步 sdk-all.js（内核层；min.js 是 api 层 + 离线 shim，保持不变！）
 cp deploy/sdkjs/{word,cell,slide,visio}/sdk-all.js 对应 vendor 目录
 # 重建 .br/.gz 预压缩

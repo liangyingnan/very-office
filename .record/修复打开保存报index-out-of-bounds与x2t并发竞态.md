@@ -44,7 +44,7 @@
 
 ## 修复内容
 
-### 1. `9.4.0/vendor/sdkjs/common/wasm/x2t/x2t_helper.js`（核心）
+### 1. `../9.4.0.131/vendor/sdkjs/common/wasm/x2t/x2t_helper.js`（核心）
 - **转换串行队列 `_enqueue`**：`convertToBin`/`convertFromBin` 全部串行执行（原逻辑改名 `_convertToBin`/`_convertFromBin`），杜绝 MEMFS 并发踩踏 → 越界。
 - **转换前 `FS.unlink(outputPath)`**：清理上次残留的同名输出文件，失败时不再读到残留假成功。
 
@@ -57,7 +57,7 @@
 - 打开失败 toast 附加提示「若为最近文件，可能是旧版本保存的损坏文件，可删除后重新导入」。
 - 保存超时 30s → 60s（首次转换含 wasm 加载）。
 
-### 4. `9.4.0/vendor/document_editor_service_worker.js`
+### 4. `../9.4.0.131/vendor/document_editor_service_worker.js`
 - SW 缓存版本 `_v3 → _v4`：强制用户浏览器丢弃旧缓存（可能含损坏/旧版 sdk 与 x2t 文件）。
 
 ## 验证

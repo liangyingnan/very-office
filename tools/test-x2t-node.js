@@ -4,11 +4,11 @@
 const fs = require('fs')
 const path = require('path')
 
-const X2T_DIR = path.join(__dirname, '../9.4.0/vendor/sdkjs/common/wasm/x2t')
+const X2T_DIR = path.join(__dirname, '../9.4.0.131/vendor/sdkjs/common/wasm/x2t')
 process.chdir(X2T_DIR) // wasm 按相对路径从 cwd 加载
 
 // ---- 模拟浏览器环境 ----
-const fakeScript = { getAttribute: () => '/9.4.0/vendor/sdkjs/common/wasm/x2t/x2t.js' }
+const fakeScript = { getAttribute: () => '/9.4.0.131/vendor/sdkjs/common/wasm/x2t/x2t.js' }
 global.document = {
     currentScript: fakeScript,
     baseURI: 'http://localhost:8000/9.4.0/vendor/web-apps/apps/word/main/index.html',
@@ -22,7 +22,7 @@ global.document = {
 }
 global.window = global
 // fetchFonts：Node 里没有 sdk 注入的 shim，这里模拟浏览器中 shim 的行为（拉真实字体文件）
-const FONT_DIR = path.join(__dirname, '../9.4.0/vendor/fonts')
+const FONT_DIR = path.join(__dirname, '../9.4.0.131/vendor/fonts')
 global.AscCommon = global.AscCommon || {}
 global.AscCommon.fetchFonts = (cb) => {
     // 简化：只拉 DejaVu 系列（x2t 需要的核心字体），浏览器里 shim 会拉全部

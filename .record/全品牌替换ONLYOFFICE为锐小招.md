@@ -47,7 +47,7 @@
 - `translations/*.json`（15 种语言）：key `"By ONLYOFFICE"` → `"By 锐小招"`，翻译值同步替换
 
 ### 7. Service Worker 缓存版本
-`9.4.0/vendor/document_editor_service_worker.js`：`g_cacheName` / `g_fifoCacheName` 版本 `_v5` → `_v6`，
+`../9.4.0.131/vendor/document_editor_service_worker.js`：`g_cacheName` / `g_fifoCacheName` 版本 `_v5` → `_v6`，
 强制已注册用户重新缓存更新后的资源。
 
 ## 明确不动的部分（重要）

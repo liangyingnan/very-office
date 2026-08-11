@@ -20,15 +20,15 @@
 
 | 来源仓库 | 内容 | 在本项目的位置 |
 |----------|------|----------------|
-| `F:\JsWorkSpace\DocumentServer`（v9.4.0.131） | `sdkjs`（编辑器 JS 内核，含离线 x2t 引擎） | `9.4.0/vendor/sdkjs/` |
-| `F:\JsWorkSpace\DocumentServer`（v9.4.0.131） | `web-apps`（编辑器前端 UI，源码） | `9.4.0/vendor/web-apps/` |
-| `F:\JsWorkSpace\onlyoffice.github.io` | `sdkjs-plugins`（插件源码，50+ 插件） | `9.4.0/vendor/sdkjs-plugins/` |
-| `F:\JsWorkSpace\onlyoffice.github.io` | `store`（插件市场 UI，已改名为 `plugins-store`） | `9.4.0/vendor/plugins-store/` |
+| `F:\JsWorkSpace\DocumentServer`（v9.4.0.131） | `sdkjs`（编辑器 JS 内核，含离线 x2t 引擎） | `9.4.0.131/vendor/sdkjs/` |
+| `F:\JsWorkSpace\DocumentServer`（v9.4.0.131） | `web-apps`（编辑器前端 UI，源码） | `9.4.0.131/vendor/web-apps/` |
+| `F:\JsWorkSpace\onlyoffice.github.io` | `sdkjs-plugins`（插件源码，50+ 插件） | `9.4.0.131/vendor/sdkjs-plugins/` |
+| `F:\JsWorkSpace\onlyoffice.github.io` | `store`（插件市场 UI，已改名为 `plugins-store`） | `9.4.0.131/vendor/plugins-store/` |
 | `F:\JsWorkSpace\OnlyofficePersonal` | **目标参考**：已构建好的离线编辑器（9.3 产物 + 9.4 x2t） | 只读参考，**不要修改其代码** |
 | `F:\JsWorkSpace\DesktopEditors` | 桌面版 ONLYOFFICE（原生 C++ + web-apps），离线配置参考 | 只读参考 |
 | `F:\C++WorkSpace\onlyoffice-x2t-wasm` | CryptPad 的 x2t wasm 编译工程（qmake+emscripten+Docker） | 参考/兜底，**当前主线构建不需要用它编译** |
 
-> **关于 x2t.wasm 的重要说明**：本项目的 `9.4.0/vendor/sdkjs/common/wasm/x2t/` 已经内置了与
+> **关于 x2t.wasm 的重要说明**：本项目的 `9.4.0.131/vendor/sdkjs/common/wasm/x2t/` 已经内置了与
 > `OnlyofficePersonal` **字节一致**的 `x2t.wasm`（42MB）/ `x2t.js` / `x2t_helper.js`（均为 9.4 版）。
 > 因此本离线编辑器**不需要**再通过 `onlyoffice-x2t-wasm` 的 Docker 流程重新编译 x2t；
 > 该仓库仅作为「内置 x2t 万一有格式问题」时的兜底来源。`onlyoffice-wasm-build/` 目录下的早期
@@ -40,12 +40,17 @@
 very-office/
 ├── 9.4.0/
 │   └── vendor/
-│       ├── sdkjs/            # 编辑器 JS 内核（含 common/wasm/x2t/ 离线转换引擎，已预编译 sdk-all-min.js）
-│       ├── web-apps/         # 编辑器前端 UI（源码，需 grunt 构建）
-│       ├── sdkjs-plugins/    # 插件源码（content/ 下 50+ 插件，含 drawio/ai/zhipu/...）
+│       ├── sdkjs/            # 编辑器 JS 内核（含 common/wasm/x2t/ 离线转换引擎，已预编译 sdk-all-min.js；
+│       │                     #   未压缩 sdk-all.js 已于 2026-08-11 瘦身删除，可从 DocumentServer 重建恢复）
+│       ├── web-apps/         # 编辑器前端 UI（源码，需 grunt 构建；各编辑器 resources/help 离线帮助
+│       │                     #   已于 2026-08-11 瘦身删除，Help 菜单会 404，重建 web-apps 可恢复）
+│       ├── sdkjs-plugins/    # 插件源码（2026-08-11 起只保留 office-config.js 启用的 10 个插件 + v1 公共库，
+│       │                     #   全量 50+ 可从 onlyoffice.github.io 仓库拷贝恢复）
 │       ├── plugins-store/    # 插件市场 UI（由 onlyoffice.github.io 的 store 改名，可选构建）
-│       ├── fonts/            # 字体（~327M，按索引命名）
-│       ├── dictionaries/     # 拼写词典
+│       ├── fonts/            # 字体（267 个索引文件 ~285M；同名 .br/.gz 预压缩变体已删除，
+│       │                     #   仅影响 nginx 预压缩部署，可用 brotli/gzip 重新生成）
+│       ├── dictionaries/     # 拼写词典（2026-08-11 起只保留 en_US/en_GB/de_DE/fr_FR/es_ES/ru_RU/pt_BR，
+│       │                     #   全量 50 种可从 DocumentServer/dictionaries 拷贝恢复）
 │       └── document_editor_service_worker.js  # 静态资源缓存 Service Worker
 ├── assets/                   # office-config.js（入口配置）、favicon.ico、empty.pdf
 ├── blank/                    # 新建文档的空白模板
@@ -55,14 +60,14 @@ very-office/
 └── onlyoffice-wasm-build/    # 早期 wasm 方案脚本（历史参考，当前主线不使用）
 ```
 
-> 版本化目录约定：参考项目用 `<version>-<hash>/vendor/...`；本项目对应为 `9.4.0/vendor/...`。
-> Service Worker 的缓存版本键是从 URL 路径自动取 `vendor` 段，因此 `9.4.0/vendor/` 布局天然兼容，无需改版本号。
+> 版本化目录约定：参考项目用 `<version>-<hash>/vendor/...`；本项目对应为 `9.4.0.131/vendor/...`。
+> Service Worker 的缓存版本键是从 URL 路径自动取 `vendor` 段，因此 `9.4.0.131/vendor/` 布局天然兼容，无需改版本号。
 
 ## 集成入口文件（关键`)
 
 - `office.html`：外壳页。先加载 `assets/office-config.js`（暴露全局 `OfficeConfig`），
   通过 `postMessage({type:'onlyoffice-config', ...})` 把文档配置注入内嵌的 `onlyoffice.html` iframe。
-- `onlyoffice.html`：编辑器宿主。加载 `9.4.0/vendor/web-apps/apps/api/documents/api.js`（定义 `DocsAPI`），
+- `onlyoffice.html`：编辑器宿主。加载 `9.4.0.131/vendor/web-apps/apps/api/documents/api.js`（定义 `DocsAPI`），
   设置 `window.OO_FILE_STREAM_ONLY = true`，收到配置后用 `new DocsAPI.DocEditor('editor', config)` 启动。
 - `assets/office-config.js`：拼装 `DocEditor` 的 `document` / `documentType` / `editorConfig`，
   并通过 `editorConfig.plugins.pluginsData` 登记默认插件；离线打开走 `localOpenFromBinary` + x2t 转换。
@@ -73,7 +78,7 @@ very-office/
 
 | 文件 | 处理结果 |
 |------|----------|
-| `onlyoffice.html` | 已改为 `9.4.0/vendor/web-apps/apps/api/documents/api.js`，并移植离线流程（`_offline_` + x2t 注入 + `asc_nativeGetFile3` 保存） |
+| `onlyoffice.html` | 已改为 `9.4.0.131/vendor/web-apps/apps/api/documents/api.js`，并移植离线流程（`_offline_` + x2t 注入 + `asc_nativeGetFile3` 保存） |
 | `assets/office-config.js` 的 `pluginsData` | 已改为相对编辑器 iframe 的 `../../../../sdkjs-plugins/content/<name>/config.json` |
 | Service Worker | 9.4 web-apps 自身经 `docserviceworker.js` 注册（路径 `../../../../document_editor_service_worker.js`），无需手动注册 |
 
@@ -110,26 +115,31 @@ very-office/
 ### 2. web-apps（必须构建）
 - 纯源码，需 Grunt 构建：
   ```bash
-  cd 9.4.0/vendor/web-apps/build
+  cd 9.4.0.131/vendor/web-apps/build
   npm install                # grunt 1.6.1 + babel/terser/less/requirejs
   npx grunt deploy-documenteditor deploy-spreadsheeteditor \
               deploy-presentationeditor deploy-pdfeditor deploy-visioeditor deploy-common-component
   ```
-- 产物在 `web-apps/deploy/web-apps/`，同步回 `9.4.0/vendor/web-apps/`
+- 产物在 `web-apps/deploy/web-apps/`，同步回 `9.4.0.131/vendor/web-apps/`
   （`cp -r deploy/web-apps/* ../web-apps/`）。确保 `apps/api/documents/api.js` 与各编辑器 `main.js` 存在。
 
 ### 3. 插件（静态，无需构建）
-- `9.4.0/vendor/sdkjs-plugins/content/<plugin>/` 直接作为静态资源服务即可。
-- 在 `assets/office-config.js` 的 `pluginsData` 里登记 `9.4.0/vendor/sdkjs-plugins/content/<plugin>/config.json`
+- `9.4.0.131/vendor/sdkjs-plugins/content/<plugin>/` 直接作为静态资源服务即可。
+- 在 `assets/office-config.js` 的 `pluginsData` 里登记 `9.4.0.131/vendor/sdkjs-plugins/content/<plugin>/config.json`
   即默认启用。drawio 的 guid 为 `asc.{DB38923B-A8C0-4DE9-8AEE-A61BB5C901A5}`。
 
 ### 4. plugins-store（可选）
-- 插件市场 UI，用 `9.4.0/vendor/plugins-store/build.bat`（closure compiler）构建 `code_min.js`。
+- 插件市场 UI，用 `9.4.0.131/vendor/plugins-store/build.bat`（closure compiler）构建 `code_min.js`。
 - 离线编辑不依赖它，仅在需要应用内浏览/安装插件市场时才构建。
 
 ### 5. x2t.wasm（已内置，无需编译）
-- 位于 `9.4.0/vendor/sdkjs/common/wasm/x2t/`，9.4 版，与参考项目字节一致。
+- 位于 `9.4.0.131/vendor/sdkjs/common/wasm/x2t/`，9.4 版，与参考项目字节一致。
 - 仅当离线转换出现格式问题时，才考虑用 `onlyoffice-x2t-wasm` 重新编译并替换。
+
+### 6. 资源瘦身（2026-08-11 已执行一次）
+- 脚本：`python tools/trim-9.4.0-assets.py`（默认 dry-run 预览，`--apply` 才删除；幂等）。
+  裁剪词典（留 7 种）、离线帮助（全删）、未启用插件（留 10 个 + v1）、未压缩 `sdk-all.js`。
+- 执行后必须按下方约束把 Service Worker 缓存版本 `_vN` +1。
 
 ## 运行与验证
 
@@ -162,9 +172,9 @@ python -m http.server 8000     # 必须用 http 服务，禁止 file://
 
 - **不要修改 `F:\JsWorkSpace\OnlyofficePersonal` 中的代码**——它仅作为只读参考/已知可用的成品基线。
 - 版本对齐：`sdkjs` / `web-apps` 为 9.4.0.131；内置 `x2t.wasm` 已是 9.4，无需强行对齐到 CryptPad 的 9.3.0.140。
-- **替换 `9.4.0/vendor/` 下任何静态资源（尤其是 `sdkjs/common/wasm/x2t/`）后，必须同步把
-  `9.4.0/vendor/document_editor_service_worker.js` 中 `g_cacheName` / `g_fifoCacheName` 的 `_vN`
-  后缀 +1**（当前为 `_v15`）。否则 Service Worker 会继续服务旧缓存，可能出现新旧文件混搭
+- **替换 `9.4.0.131/vendor/` 下任何静态资源（尤其是 `sdkjs/common/wasm/x2t/`）后，必须同步把
+  `9.4.0.131/vendor/document_editor_service_worker.js` 中 `g_cacheName` / `g_fifoCacheName` 的 `_vN`
+  后缀 +1**（当前为 `_v16`）。否则 Service Worker 会继续服务旧缓存，可能出现新旧文件混搭
   （如旧 `x2t.js` + 新 `x2t.wasm` 导致的 `Import #0 "a"` wasm 实例化错误）。客户端首次仍需
   在 DevTools → Application → Storage → Clear site data 后硬刷新一次。
 

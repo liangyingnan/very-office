@@ -25,7 +25,7 @@ x2t 初始化失败，文档无法打开。
      且 vendor 下两个文件与 `build\x2t.zip` 内文件 `cmp` 字节一致。
 2. **实际运行的是"旧 JS + 新 wasm"混搭**。`9.4.0\vendor\document_editor_service_worker.js`
    把 `sdkjs/` 前缀静态资源缓存进 Cache Storage，缓存名 =
-   `document_editor_static_` + URL 中 `vendor` 前一段（即 `9.4.0`）+ 硬编码后缀 `_v6`。
+   `document_editor_static_` + URL 中 `vendor` 前一段（即 `9.4.0.131`）+ 硬编码后缀 `_v6`。
    本次原地替换文件、URL 路径不变 → 缓存键不变 → SW 继续返回**缓存中的旧 `x2t.js`**
    （只提供 `env`/`wasi` 导入）；而 36MB 的 `x2t.wasm` 超过 SW 单条缓存上限
    （缓存约 10% 配额、单条上限 1/8）从未入缓存，走网络拿到**新 wasm**（要求模块 `"a"`）。
@@ -36,7 +36,7 @@ x2t 初始化失败，文档无法打开。
 1. `9.4.0\vendor\document_editor_service_worker.js`：
    - `g_cacheName` 后缀 `_v6` → `_v7`（第 44 行）
    - `g_fifoCacheName` 后缀 `_v6` → `_v7`（第 62 行）
-2. `AGENTS.md` 约束一节新增约定：**替换 `9.4.0/vendor/` 下任何静态资源后必须 bump 该 `_vN` 后缀**。
+2. `AGENTS.md` 约束一节新增约定：**替换 `../9.4.0.131/vendor/` 下任何静态资源后必须 bump 该 `_vN` 后缀**。
 3. 客户端一次性操作：DevTools → Application → Storage → **Clear site data**，再硬刷新
    （旧 SW 仍在控制页面，需等新版 SW 激活后才会使用 `_v7` 新缓存）。
 
@@ -81,7 +81,7 @@ x2t 初始化失败，文档无法打开。
   （`../../../../sdkjs/.../x2t.js`），`new URL()` 不带 base 直接抛异常，且 throw 发生在
   脚本顶层 IIFE → x2t.js 后续代码全部不执行 → x2t 静默失效（helper 的 onload 照常触发，具有迷惑性）。
 - **修复**：三处同步改为 `new URL(mySrc, document.baseURI).search`：
-  ① `9.4.0/vendor/sdkjs/common/wasm/x2t/x2t.js`（部署文件）；
+  ① `../9.4.0.131/vendor/sdkjs/common/wasm/x2t/x2t.js`（部署文件）；
   ② `onlyoffice-x2t-wasm/pre-js.js`（编译源头，防止下次编译复发）；
   ③ `onlyoffice-x2t-wasm/build/x2t.js`（已有构建产物，防止再次拷贝时带回 bug）。
 - SW 缓存版本 `_v8` → `_v9`。

@@ -11,7 +11,7 @@
 #
 # 用法（在 WSL 里执行）：
 #   ./extract_frontend.sh                 # 默认 latest(≈9.4)，输出到 ./build/vendor
-#   DS_TAG=9.4.0 ./extract_frontend.sh    # 指定镜像 tag（建议与你的意图对齐）
+#   DS_TAG=9.4.0.131 ./extract_frontend.sh    # 指定镜像 tag（建议与你的意图对齐）
 #   OUT_DIR=/path/to/vendor ./extract_frontend.sh
 #
 # 注意：容器 Web 根路径若与你的镜像版本不符，改下面 CONTAINER_WEB_ROOT 即可

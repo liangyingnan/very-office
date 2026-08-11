@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <title>锐小招</title>
     <link rel="icon" href="./assets/favicon.ico" type="image/x-icon"/>
-    <script type="text/javascript" src="9.4.0/vendor/web-apps/apps/api/documents/api.js"></script>
+    <script type="text/javascript" src="9.4.0.131/vendor/web-apps/apps/api/documents/api.js"></script>
     <style>
         * {
             margin: 0;
@@ -92,7 +92,7 @@
     }
 
     // 9.4 web-apps 不会自动加载 x2t_helper，需要宿主注入到编辑器 iframe
-    // （x2t_helper 内部 SCRIPT_PATH 相对 iframe 页面解析，与 9.4.0/vendor 布局自洽）
+    // （x2t_helper 内部 SCRIPT_PATH 相对 iframe 页面解析，与 9.4.0.131/vendor 布局自洽）
     const X2T_HELPER_SRC = '../../../../sdkjs/common/wasm/x2t/x2t_helper.js'
 
     function ensureX2tInjected() {
