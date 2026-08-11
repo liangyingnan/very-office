@@ -20,3 +20,4 @@ tools/.probe-*
 
 # 本地部署快照（2.1G，不入库）
 /office-local/
+office-local.zip
