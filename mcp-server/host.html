@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>very-office MCP host</title>
+    <style>
+        html, body { margin: 0; padding: 0; height: 100%; }
+        iframe { width: 100%; height: 100%; border: 0; display: block; }
+    </style>
+</head>
+<body>
+<script>
+    'use strict'
+
+    // MCP 宿主页：内嵌 /onlyoffice.html，实现父侧 postMessage 协议，
+    // 对外暴露 window.__oo = { open, save, exec, status }（Promise 化），
+    // 供 mcp-server 经 Playwright page.evaluate 驱动。
+    // 不加载插件、不做 UI —— 仅为无头自动化服务。
+
+    const OPEN_TIMEOUT_MS = 120000
+    const SAVE_TIMEOUT_MS = 120000
+    const POLL_INTERVAL_MS = 250
+
+    let ooFrame = null
+    let hostReady = false
+    let saveSeq = 0
+    const pendingSaves = {}
+    let openError = null   // 最近一次 onlyoffice-open-error（open 轮询时读取）
+
+    function getEditorFrame() {
+        if (!ooFrame || !ooFrame.contentWindow) return null
+        const doc = ooFrame.contentWindow.document
+        const frames = doc.querySelectorAll('iframe[name="frameEditor"]')
+        if (frames.length) return frames[frames.length - 1]
+        return doc.querySelector('#editor iframe')
+    }
+
+    function base64ToArrayBuffer(b64) {
+        const bin = atob(b64)
+        const bytes = new Uint8Array(bin.length)
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+        return bytes.buffer
+    }
+
+    function arrayBufferToBase64(buffer) {
+        const bytes = new Uint8Array(buffer)
+        let out = ''
+        const CHUNK = 0x8000
+        for (let i = 0; i < bytes.length; i += CHUNK) {
+            out += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK))
+        }
+        return btoa(out)
+    }
+
+    function sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms))
+    }
+
+    async function waitHostReady() {
+        const start = Date.now()
+        while (!hostReady) {
+            if (Date.now() - start > OPEN_TIMEOUT_MS) throw new Error('onlyoffice.html 就绪超时')
+            await sleep(POLL_INTERVAL_MS)
+        }
+    }
+
+    // 打开文档：bytesB64 为原始 docx 字节的 base64
+    async function open(bytesB64, title, fileType) {
+        await waitHostReady()
+        openError = null
+        const oldFrame = getEditorFrame()
+        const buffer = base64ToArrayBuffer(bytesB64)
+        const docConfig = {
+            document: {
+                fileType: fileType || 'docx',
+                title: title || 'document.docx',
+                permissions: { edit: true, download: true, print: true }
+            },
+            documentType: 'word',
+            localOpenFromBinary: true,
+            editorConfig: {
+                mode: 'edit',
+                lang: 'zh-CN',
+                user: { id: 'mcp-user', name: 'MCP' }
+            }
+        }
+        ooFrame.contentWindow.postMessage(
+            { type: 'onlyoffice-config', docConfig: docConfig, openBuffer: buffer }, '*', [buffer])
+
+        // 等编辑器 iframe 换新且真实字节注入完成（__ooRealBytesInjected 由 onlyoffice.html 设置）
+        const start = Date.now()
+        for (;;) {
+            if (openError) throw new Error('文档打开失败: ' + openError)
+            const f = getEditorFrame()
+            if (f && f !== oldFrame) {
+                try {
+                    if (f.contentWindow && f.contentWindow.__ooRealBytesInjected) return true
+                } catch (e) { /* 跨域防护/重建中，继续等 */ }
+            }
+            if (Date.now() - start > OPEN_TIMEOUT_MS) throw new Error('文档打开超时')
+            await sleep(POLL_INTERVAL_MS)
+        }
+    }
+
+    // 保存：走 onlyoffice.html 的离线链路（asc_nativeGetFile3 -> x2t -> 字节回传）
+    function save(format) {
+        const requestId = 'mcp-save-' + (++saveSeq)
+        return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+                delete pendingSaves[requestId]
+                reject(new Error('保存超时'))
+            }, SAVE_TIMEOUT_MS)
+            pendingSaves[requestId] = {
+                resolve: (data) => {
+                    clearTimeout(timer)
+                    resolve({
+                        base64: arrayBufferToBase64(data.buffer),
+                        fileType: data.fileType || '',
+                        fileName: data.fileName || ''
+                    })
+                },
+                reject: (err) => { clearTimeout(timer); reject(err) }
+            }
+            ooFrame.contentWindow.postMessage(
+                { type: 'onlyoffice-save', requestId: requestId, format: format || 'docx' }, '*')
+        })
+    }
+
+    // 在编辑器 iframe 内执行 Office API 命令（Api/ThisDocument/Asc.scope 可用）
+    // fnText: 函数表达式源码字符串，如 "(function(){ var d = Api.GetDocument(); return d.GetElement(0).GetText(); })"
+    function exec(fnText, params) {
+        const f = getEditorFrame()
+        const w = f && f.contentWindow
+        if (!w || !w.__ooRealBytesInjected) throw new Error('文档未就绪（请先 open）')
+        const api = w.Asc && w.Asc.editor
+        if (!api || typeof api.native_callCommand !== 'function') {
+            throw new Error('编辑器内核未就绪（native_callCommand 不可用）')
+        }
+        const result = api.native_callCommand(fnText, params === undefined || params === null ? {} : params)
+        return result === undefined ? null : result
+    }
+
+    function status() {
+        const f = getEditorFrame()
+        const w = f && f.contentWindow
+        return {
+            hostReady: hostReady,
+            editorFrame: !!f,
+            injected: !!(w && w.__ooRealBytesInjected),
+            hasApi: !!(w && w.Asc && w.Asc.editor && typeof w.Asc.editor.native_callCommand === 'function')
+        }
+    }
+
+    window.addEventListener('message', (event) => {
+        const d = event.data
+        if (!d || !ooFrame || event.source !== ooFrame.contentWindow) return
+        switch (d.type) {
+            case 'onlyoffice-ready':
+                hostReady = true
+                break
+            case 'onlyoffice-open-error':
+                openError = String(d.error || '未知错误')
+                break
+            case 'onlyoffice-saved': {
+                const p = d.requestId && pendingSaves[d.requestId]
+                if (!p) break
+                delete pendingSaves[d.requestId]
+                if (d.ok && d.buffer) p.resolve(d)
+                else p.reject(new Error(d.error || '保存失败'))
+                break
+            }
+        }
+    })
+
+    ooFrame = document.createElement('iframe')
+    ooFrame.src = '/onlyoffice.html'
+    document.body.appendChild(ooFrame)
+
+    window.__oo = { open, save, exec, status }
+</script>
+</body>
+</html>

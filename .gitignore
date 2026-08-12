@@ -21,3 +21,7 @@ tools/.probe-*
 # 本地部署快照（2.1G，不入库）
 /office-local/
 office-local.zip
+
+# MCP 服务文档工作目录（运行时产物）
+mcp-server/documents/*
+!mcp-server/documents/.gitkeep

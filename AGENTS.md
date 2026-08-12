@@ -38,10 +38,13 @@
 
 ```
 very-office/
-├── 9.4.0/
+├── 9.4.0.131/
 │   └── vendor/
-│       ├── sdkjs/            # 编辑器 JS 内核（含 common/wasm/x2t/ 离线转换引擎，已预编译 sdk-all-min.js；
-│       │                     #   未压缩 sdk-all.js 已于 2026-08-11 瘦身删除，可从 DocumentServer 重建恢复）
+│       ├── sdkjs/            # 编辑器 JS 内核（含 common/wasm/x2t/ 离线转换引擎 + 预编译完整版
+│       │                     #   sdk-all-min.js〔= min api 层 + IIFE 包裹的 common 模型层，
+│       │                     #   运行时唯一加载的 sdk 文件〕；未压缩 sdk-all.js 已于 2026-08-11
+│       │                     #   瘦身删除，原位留有 __ooSdkAllStub 兼容 stub（吸收旧浏览器缓存
+│       │                     #   残留页面的 sdk-all.js 引用）；完整版可从 DocumentServer 重建恢复）
 │       ├── web-apps/         # 编辑器前端 UI（源码，需 grunt 构建；各编辑器 resources/help 离线帮助
 │       │                     #   已于 2026-08-11 瘦身删除，Help 菜单会 404，重建 web-apps 可恢复）
 │       ├── sdkjs-plugins/    # 插件源码（2026-08-11 起只保留 office-config.js 启用的 10 个插件 + v1 公共库，
@@ -57,7 +60,12 @@ very-office/
 ├── docs/                     # 文档 / 截图
 ├── office.html               # 演示入口（外壳页：最近文件、IndexedDB、iframe 内嵌 onlyoffice.html）
 ├── onlyoffice.html           # 集成入口（加载 api.js，postMessage 协议，OO_FILE_STREAM_ONLY）
-└── onlyoffice-wasm-build/    # 早期 wasm 方案脚本（历史参考，当前主线不使用）
+├── onlyoffice-wasm-build/    # 早期 wasm 方案脚本（历史参考，当前主线不使用）
+├── mcp-server/               # MCP 服务（2026-08-12 新增）：把离线编辑器封装成 MCP 工具供大模型调用
+│   ├── host.html             #   无头宿主页（iframe 内嵌 /onlyoffice.html，暴露 window.__oo）
+│   ├── src/                  #   index.js(stdio 入口)/tools.js/editor.js/browser.js/static-server.js/runtime.js
+│   ├── scripts/              #   smoke-test.js（编辑器层全链路）、mcp-selftest.js（协议层全工具）
+│   └── documents/            #   文档工作目录（运行时产物，已 gitignore）
 ```
 
 > 版本化目录约定：参考项目用 `<version>-<hash>/vendor/...`；本项目对应为 `9.4.0.131/vendor/...`。
@@ -89,10 +97,22 @@ very-office/
 - vendor 下的 `sdkjs/` 只含构建产物（无源码树）；源码与构建脚本在 `F:\JsWorkSpace\DocumentServer\sdkjs\`
   （v9.4.0.131 + 本项目离线修复）。重建：`cd F:\JsWorkSpace\DocumentServer\sdkjs\build && python build.py`
   （仅文件拼接，需 Python 3），产物在 `DocumentServer/sdkjs/deploy/sdkjs/`。
-- **`sdk-all.js` 同步规则**：只允许同步 `sdk-all.js`（内核层）。DocumentServer 源码上叠了本项目的离线修复
+- **sdk 同步规则**：vendor 的 sdk 产物只允许从 `DocumentServer\sdkjs\deploy\sdkjs\` 同步。
+  该源码上叠了本项目的离线修复
   （`DocumentProtection.js` 恢复 CDocProtect.Write/Read_ToBinary2 + `HistoryCommon.js` 新增
   `historyitem_type_DocumentProtection = 74<<16`、`custom-xml-manager.js` 补 Write_ToBinary2 占位、
   `InsertDocumentFile.js` 插入文本离线分支），从官方干净源码重建会丢这些修复。
+- **sdk-all-min.js 必须是完整 bundle（2026-08-11 修复）**：9.4 web-apps 运行时**只加载
+  `sdk-all-min.js`**（requirejs `sdk` 路径 / cache-scripts.html，无任何 `sdk-all.js` 引用）。
+  build.py 旧版只拼接 configs 中 `sdk.min` 的 42 个 api 层文件（`sdk.common` 的 ~390 个模型层文件
+  只进了无人加载的 `sdk-all.js`），导致 `AscCommon.History`（word/Editor/History.js）、
+  `setCurrentCultureInfo`（common/NumFormat.js）等缺失，编辑器启动即崩
+  （`CTableId.Add: Cannot read properties of undefined (reading 'Add')`）。
+  现 build.py 已修正为 `sdk-all-min.js = min 列表 + IIFE 包裹的 common 列表`（与参考项目
+  "先 sdk-all-min.js 后 sdk-all.js" 两文件加载的顺序/作用域等价）。详见
+  `.record/修复sdk-all-min缺失模型层致启动崩溃.md`。
+- **inject 脚本路径**：`tools/inject-9.4.0-offline-shim.py` 的 `SDKJS` 常量已指向
+  `9.4.0.131`（2026-08-11 目录改名后修正；vendor 目录若再改名需同步改这里）。
 - **重要**：`vendor/sdkjs/<word|cell|slide|visio>/sdk-all-min.js` 尾部追加了离线 shim
   （getEmpty 空文档 bin + fetchFonts 字体喂给 wasm〔支持按需过滤，见下〕+ 本地许可/compareVersions 包装 +
   asc_openDocumentFromBytes 的 History 重置 + isDocumentLoadComplete 复位 + saveChanges 离线假完成）。
@@ -141,6 +161,22 @@ very-office/
   裁剪词典（留 7 种）、离线帮助（全删）、未启用插件（留 10 个 + v1）、未压缩 `sdk-all.js`。
 - 执行后必须按下方约束把 Service Worker 缓存版本 `_vN` +1。
 
+### 7. mcp-server（MCP 封装，2026-08-12 新增）
+- 位置 `mcp-server/`（Node ≥18）：`npm install` 一次即可，**无构建步骤**，不改动仓库任何已有文件。
+- 机制：内嵌静态服务（仅 127.0.0.1）+ playwright-core 驱动系统 Chrome 无头加载
+  `mcp-server/host.html`（iframe 内嵌 `/onlyoffice.html`，复用现有离线打开/保存协议）；
+  文档修改经编辑器 iframe 内 `Asc.editor.native_callCommand(code, params)` 执行
+  （`safePluginEval` 注入 `Api`/`ThisDocument`/`Asc.scope`，即完整 Office API 文本文档 API）。
+- 入口 `src/index.js`（stdio MCP），9 个工具：create/open/list/delete/save/get_document_text/
+  insert_text/replace_text/office_execute。详见 `mcp-server/README.md`。
+- 验证：`npm run smoke`（编辑器层全链路 + adm-zip 独立校验）、`npm run mcp-selftest`
+  （真实 stdio 握手 + 全工具调用）。两者当前均全绿。
+- 环境变量：`OO_DOCS_DIR`（文档工作目录，默认 `mcp-server/documents/`）、`OO_PORT`、
+  `CHROME_PATH`、`OO_HEADLESS=0`（显示浏览器调试）。
+- **会话模型：单活动文档**——同一时刻编辑器只开一个文档。
+- 若重建/替换 vendor 的 sdkjs 后 shim 重跑，`native_callCommand` 在 `sdk-all-min.js` 中
+  是带引号的导出键（`["native_callCommand"]`），压缩不会丢；验证方式：跑一次 `npm run smoke`。
+
 ## 运行与验证
 
 ```bash
@@ -174,7 +210,7 @@ python -m http.server 8000     # 必须用 http 服务，禁止 file://
 - 版本对齐：`sdkjs` / `web-apps` 为 9.4.0.131；内置 `x2t.wasm` 已是 9.4，无需强行对齐到 CryptPad 的 9.3.0.140。
 - **替换 `9.4.0.131/vendor/` 下任何静态资源（尤其是 `sdkjs/common/wasm/x2t/`）后，必须同步把
   `9.4.0.131/vendor/document_editor_service_worker.js` 中 `g_cacheName` / `g_fifoCacheName` 的 `_vN`
-  后缀 +1**（当前为 `_v16`）。否则 Service Worker 会继续服务旧缓存，可能出现新旧文件混搭
+  后缀 +1**（当前为 `_v19`）。否则 Service Worker 会继续服务旧缓存，可能出现新旧文件混搭
   （如旧 `x2t.js` + 新 `x2t.wasm` 导致的 `Import #0 "a"` wasm 实例化错误）。客户端首次仍需
   在 DevTools → Application → Storage → Clear site data 后硬刷新一次。
 
