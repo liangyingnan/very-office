@@ -115,10 +115,17 @@ def main():
             else:
                 remove(os.path.join(p, "deploy"), apply, stats)
 
-    # 4. 未压缩 sdk-all.js(运行时只加载 sdk-all-min.js)
+    # 4. 未压缩 sdk-all.js(运行时只加载 sdk-all-min.js);
+    #    含 __ooSdkAllStub 标记的兼容 stub 保留(吸收旧浏览器缓存残留页面的 sdk-all.js 引用)
     print("\n[4] sdkjs 未压缩 sdk-all.js")
     for d in SDKJS_DIRS:
-        remove(os.path.join(VENDOR, "sdkjs", d, "sdk-all.js"), apply, stats)
+        p = os.path.join(VENDOR, "sdkjs", d, "sdk-all.js")
+        if os.path.isfile(p):
+            with open(p, 'rb') as f:
+                if b'__ooSdkAllStub' in f.read(2048):
+                    print("  保留 stub: " + p)
+                    continue
+        remove(p, apply, stats)
 
     print("\n=== 合计: %d 个目标, %s ===" % (stats[0], mb(stats[1])))
     if not apply:

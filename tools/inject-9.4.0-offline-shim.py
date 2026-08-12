@@ -22,7 +22,7 @@ import gzip
 import subprocess
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SDKJS = os.path.join(ROOT, '9.4.0', 'vendor', 'sdkjs')
+SDKJS = os.path.join(ROOT, '9.4.0.131', 'vendor', 'sdkjs')
 PRODUCTS = ['word', 'cell', 'slide', 'visio']
 
 # ---------------------------------------------------------------------------
