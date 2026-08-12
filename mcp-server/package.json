@@ -7,8 +7,10 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
+    "start:http": "node src/http.js",
     "smoke": "node scripts/smoke-test.js",
-    "mcp-selftest": "node scripts/mcp-selftest.js"
+    "mcp-selftest": "node scripts/mcp-selftest.js",
+    "http-selftest": "node scripts/http-selftest.js"
   },
   "engines": {
     "node": ">=18"
