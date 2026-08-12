@@ -1,12 +1,17 @@
 // MCP 工具注册：文本文档（word/docx）的新建/打开/读取/修改/保存/删除 + 通用 Office API 执行。
+// 文件类工具均支持可选 dir 参数：调用者指定文档目录（绝对路径），省略时回落到服务默认工作目录
+//（OO_DOCS_DIR 或 mcp-server/documents）。
 import { z } from 'zod'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { ensureRuntime } from './runtime.js'
-import { DOCS_DIR, docPath, sanitizeDocName } from './editor.js'
+import { DOCS_DIR, docPath, resolveDocsDir, sanitizeDocName } from './editor.js'
 import { REPO_ROOT } from './static-server.js'
 
 const BLANK_DOCX = path.join(REPO_ROOT, 'blank', 'blank.docx')
+
+const DIR_PARAM = z.string().optional()
+    .describe('文档目录（绝对路径，如 F:/docs/bids）；省略则用服务默认工作目录')
 
 function ok(data) {
     return { content: [{ type: 'text', text: typeof data === 'string' ? data : JSON.stringify(data, null, 2) }] }
@@ -16,95 +21,108 @@ function fail(error) {
     return { content: [{ type: 'text', text: `错误: ${(error && error.message) || error}` }], isError: true }
 }
 
-async function currentTarget(session, name) {
-    if (name) return docPath(name)
+// 保存目标：传了 name 按 name+dir 解析；都没传则回当前文件原路径
+function currentTarget(session, name, dir) {
+    if (name) return docPath(name, dir)
     if (session.current) return session.current
     throw new Error('未指定文档名，且当前没有已打开的磁盘文档（请先 save_document 指定名称保存一次）')
 }
 
 export function registerTools(server) {
     server.registerTool('create_document', {
-        description: '新建一个空白 Word 文档（docx）并在编辑器中打开。name 不含扩展名；同名文件已存在则报错。',
-        inputSchema: { name: z.string().describe('文档名（不含 .docx 扩展名）') }
-    }, async ({ name }) => {
+        description: '新建一个空白 Word 文档（docx）并在编辑器中打开。name 不含扩展名；同名文件已存在则报错。可用 dir 指定目录。',
+        inputSchema: {
+            name: z.string().describe('文档名（不含 .docx 扩展名）'),
+            dir: DIR_PARAM
+        }
+    }, async ({ name, dir }) => {
         try {
             const { session } = await ensureRuntime()
-            const target = docPath(name)
-            try { await fs.access(target); throw new Error(`文档已存在: ${sanitizeDocName(name)}`) } catch (e) {
+            const target = docPath(name, dir)
+            try { await fs.access(target); throw new Error(`文档已存在: ${target}`) } catch (e) {
                 if (!e || e.code !== 'ENOENT') throw e
             }
-            await fs.mkdir(DOCS_DIR, { recursive: true })
+            await fs.mkdir(resolveDocsDir(dir), { recursive: true })
             await fs.copyFile(BLANK_DOCX, target)
             const info = await session.openFile(target)
-            return ok(`已创建并打开 ${path.basename(target)}（${info.bytes} 字节）`)
+            return ok(`已创建并打开 ${target}（${info.bytes} 字节）`)
         } catch (e) { return fail(e) }
     })
 
     server.registerTool('open_document', {
-        description: '打开文档工作目录中已存在的 docx 文档进行编辑。',
-        inputSchema: { name: z.string().describe('文档名（可带或不带 .docx）') }
-    }, async ({ name }) => {
+        description: '打开已存在的 docx 文档进行编辑。默认在文档工作目录中找，可用 dir 指定其他目录。',
+        inputSchema: {
+            name: z.string().describe('文档名（可带或不带 .docx）'),
+            dir: DIR_PARAM
+        }
+    }, async ({ name, dir }) => {
         try {
             const { session } = await ensureRuntime()
-            const target = docPath(name)
+            const target = docPath(name, dir)
             const info = await session.openFile(target)
-            return ok(`已打开 ${path.basename(target)}（${info.bytes} 字节）`)
+            return ok(`已打开 ${target}（${info.bytes} 字节）`)
         } catch (e) { return fail(e) }
     })
 
     server.registerTool('list_documents', {
-        description: '列出文档工作目录中的所有 docx 文档（名称、大小、修改时间）。',
-        inputSchema: {}
-    }, async () => {
+        description: '列出文档目录中的所有 docx 文档（名称、大小、修改时间）。默认列服务默认工作目录，可用 dir 指定其他目录。',
+        inputSchema: { dir: DIR_PARAM }
+    }, async ({ dir }) => {
         try {
             await ensureRuntime()
-            const files = (await fs.readdir(DOCS_DIR)).filter(f => f.toLowerCase().endsWith('.docx'))
+            const docsDir = resolveDocsDir(dir)
+            const files = (await fs.readdir(docsDir)).filter(f => f.toLowerCase().endsWith('.docx'))
             const rows = []
             for (const f of files) {
-                const st = await fs.stat(path.join(DOCS_DIR, f))
+                const st = await fs.stat(path.join(docsDir, f))
                 rows.push({ name: f, bytes: st.size, modified: st.mtime.toISOString() })
             }
-            return ok(rows.length ? rows : '（工作目录为空）')
+            return ok(rows.length ? { dir: docsDir, documents: rows } : `（目录为空: ${docsDir}）`)
         } catch (e) { return fail(e) }
     })
 
     server.registerTool('delete_document', {
-        description: '删除文档工作目录中的 docx 文档。若该文档正在编辑器中打开，编辑器内的未保存内容将丢失。',
-        inputSchema: { name: z.string().describe('文档名') }
-    }, async ({ name }) => {
+        description: '删除 docx 文档。默认在文档工作目录中找，可用 dir 指定其他目录。若该文档正在编辑器中打开，编辑器内的未保存内容将丢失。',
+        inputSchema: {
+            name: z.string().describe('文档名'),
+            dir: DIR_PARAM
+        }
+    }, async ({ name, dir }) => {
         try {
             const { session } = await ensureRuntime()
-            const target = docPath(name)
+            const target = docPath(name, dir)
             await fs.unlink(target)
             const wasOpen = session.current === target
             if (wasOpen) session.current = null
-            return ok(`已删除 ${path.basename(target)}` + (wasOpen ? '（删除时它正处于打开状态）' : ''))
+            return ok(`已删除 ${target}` + (wasOpen ? '（删除时它正处于打开状态）' : ''))
         } catch (e) { return fail(e) }
     })
 
     server.registerTool('save_document', {
-        description: '把当前编辑器中的文档保存到文档工作目录。不传 name 时保存回当前文件；format 默认 docx，也可指定 odt/txt/html 等 x2t 支持的格式（此时按对应扩展名另存，且不改变当前编辑的文档）。',
+        description: '把当前编辑器中的文档保存落盘。不传 name 时保存回当前文件原路径；传 name 可另存（可用 dir 指定目录）。format 默认 docx，也可指定 odt/txt/html 等 x2t 支持的格式（此时按对应扩展名另存，且不改变当前编辑的文档）。',
         inputSchema: {
             name: z.string().optional().describe('目标文档名（不含扩展名）；省略则保存回当前文件'),
+            dir: DIR_PARAM,
             format: z.string().optional().describe('输出格式，默认 docx')
         }
-    }, async ({ name, format }) => {
+    }, async ({ name, dir, format }) => {
         try {
             const { session } = await ensureRuntime()
             const fmt = (format || 'docx').toLowerCase()
             let target
             if (fmt === 'docx') {
-                target = await currentTarget(session, name)
+                target = currentTarget(session, name, dir)
             } else {
                 // 导出为其他格式：文件名按目标格式扩展名，且不改变当前文档指向
                 if (!name && !session.current) throw new Error('未指定文档名，且当前没有已打开的磁盘文档')
                 const base = name ? sanitizeDocName(name) : path.basename(session.current)
-                target = path.join(DOCS_DIR, base.replace(/\.docx$/i, '.' + fmt))
+                const outDir = name ? resolveDocsDir(dir) : path.dirname(session.current)
+                target = path.join(outDir, base.replace(/\.docx$/i, '.' + fmt))
             }
             const prevCurrent = session.current
             const info = await session.saveToFile(target, fmt)
             if (fmt !== 'docx') session.current = prevCurrent
-            return ok(`已保存 ${path.basename(target)}（${info.bytes} 字节，格式 ${fmt}）`)
+            return ok(`已保存 ${target}（${info.bytes} 字节，格式 ${fmt}）`)
         } catch (e) { return fail(e) }
     })
 

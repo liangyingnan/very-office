@@ -59,6 +59,23 @@ get_document_text(markdown|text) / insert_text / replace_text / **office_execute
 - `npm run smoke`：新建→插入→markdown/text 读取→exec 建 2x2 表并返回对象→替换→保存
   →adm-zip 独立解析 document.xml 校验→重开（x2t 往返）内容保留→删除。**PASS**
 - `npm run mcp-selftest`：stdio 握手、9 工具注册齐全、create/insert/get/exec/save/list/open/delete 全链路。**PASS**
+- `npm run http-selftest`：HTTP 传输（`src/http.js`，Streamable HTTP）——无令牌 401、
+  带 Bearer 令牌握手 + 全工具调用。**PASS**
+
+## HTTP 传输（同日追加）
+
+- `src/http.js`：`StreamableHTTPServerTransport`，每 HTTP 会话一个 transport（`mcp-session-id` 路由），
+  但**共享同一个编辑器运行时**（单活动文档，跨客户端并发会互相覆盖，需隔离就多起进程）。
+- 默认 `127.0.0.1:3000/mcp`；`OO_MCP_HOST` 绑定非回环地址时**强制 `OO_MCP_TOKEN`**（Bearer），否则拒绝启动。
+- 客户端配置：`{"url": "http://<host>:3000/mcp", "headers": {"Authorization": "Bearer <token>"}}`。
+
+## 调用者可指定文档目录（同日追加）
+
+- 所有文件类工具（create/open/list/delete/save）增加可选 `dir` 参数（绝对路径），
+  由调用者决定文档落点；省略时回落 `OO_DOCS_DIR` → `mcp-server/documents/`。
+- 实现：`editor.js` 的 `resolveDocsDir(dir)` + `docPath(name, dir)`；`save_document` 不传 name 时
+  仍保存回当前文件原路径（`session.current` 记绝对路径，自定义目录打开的文档可正确回存）。
+- `mcp-selftest` 已加 dir 全链路用例（临时目录创建/保存回原路径/列目录/删除），stdio + HTTP 两侧自测均全绿。
 
 ## 注意 / 下一步
 

@@ -3,6 +3,8 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import path from 'node:path'
+import os from 'node:os'
+import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -72,6 +74,22 @@ async function main() {
     check('重开后内容保留', !r.isError && textOf(r).includes('协议层验证文本QWE789'))
     r = await client.callTool({ name: 'delete_document', arguments: { name: NAME } })
     check('删除成功', !r.isError && textOf(r).includes('已删除'), textOf(r).slice(0, 80))
+
+    console.log('[7] dir 参数（调用者自定义目录）...')
+    const customDir = path.join(os.tmpdir(), 'very-office-dirtest')
+    fs.rmSync(customDir, { recursive: true, force: true })
+    r = await client.callTool({ name: 'create_document', arguments: { name: 'dir验证', dir: customDir } })
+    check('在自定义目录创建', !r.isError && textOf(r).includes('dir验证'), textOf(r).slice(0, 80))
+    check('文件确实落在自定义目录', fs.existsSync(path.join(customDir, 'dir验证.docx')))
+    r = await client.callTool({ name: 'insert_text', arguments: { text: '自定义目录内容' } })
+    check('插入成功', !r.isError)
+    r = await client.callTool({ name: 'save_document', arguments: {} })
+    check('保存回原路径', !r.isError && textOf(r).includes(customDir), textOf(r).slice(0, 90))
+    r = await client.callTool({ name: 'list_documents', arguments: { dir: customDir } })
+    check('列自定义目录', !r.isError && textOf(r).includes('dir验证.docx'))
+    r = await client.callTool({ name: 'delete_document', arguments: { name: 'dir验证', dir: customDir } })
+    check('删自定义目录文档', !r.isError && !fs.existsSync(path.join(customDir, 'dir验证.docx')))
+    fs.rmSync(customDir, { recursive: true, force: true })
 
     await client.close()
     if (failures) { console.error(`\nSELFTEST FAIL: ${failures} 项未通过`); process.exit(1) }

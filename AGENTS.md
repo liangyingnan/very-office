@@ -167,10 +167,12 @@ very-office/
   `mcp-server/host.html`（iframe 内嵌 `/onlyoffice.html`，复用现有离线打开/保存协议）；
   文档修改经编辑器 iframe 内 `Asc.editor.native_callCommand(code, params)` 执行
   （`safePluginEval` 注入 `Api`/`ThisDocument`/`Asc.scope`，即完整 Office API 文本文档 API）。
-- 入口 `src/index.js`（stdio MCP），9 个工具：create/open/list/delete/save/get_document_text/
+- 入口 `src/index.js`（stdio MCP）与 `src/http.js`（Streamable HTTP MCP，`npm run start:http`，
+  默认 127.0.0.1:3000/mcp；`OO_MCP_PORT`/`OO_MCP_HOST`/`OO_MCP_TOKEN` 可配，
+  绑定非回环地址强制 Bearer 令牌）。9 个工具：create/open/list/delete/save/get_document_text/
   insert_text/replace_text/office_execute。详见 `mcp-server/README.md`。
 - 验证：`npm run smoke`（编辑器层全链路 + adm-zip 独立校验）、`npm run mcp-selftest`
-  （真实 stdio 握手 + 全工具调用）。两者当前均全绿。
+  （真实 stdio 握手 + 全工具调用）、`npm run http-selftest`（HTTP 传输 + 鉴权）。三者当前均全绿。
 - 环境变量：`OO_DOCS_DIR`（文档工作目录，默认 `mcp-server/documents/`）、`OO_PORT`、
   `CHROME_PATH`、`OO_HEADLESS=0`（显示浏览器调试）。
 - **会话模型：单活动文档**——同一时刻编辑器只开一个文档。

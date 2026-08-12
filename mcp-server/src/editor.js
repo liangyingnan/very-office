@@ -19,8 +19,14 @@ export function sanitizeDocName(name) {
     return base + '.docx'
 }
 
-export function docPath(name) {
-    return path.join(DOCS_DIR, sanitizeDocName(name))
+// 解析目标目录：调用者传了 dir（绝对/相对路径均可）就用它，否则用默认工作目录
+export function resolveDocsDir(dir) {
+    if (dir === undefined || dir === null || String(dir).trim() === '') return DOCS_DIR
+    return path.resolve(String(dir))
+}
+
+export function docPath(name, dir) {
+    return path.join(resolveDocsDir(dir), sanitizeDocName(name))
 }
 
 export class EditorSession {
