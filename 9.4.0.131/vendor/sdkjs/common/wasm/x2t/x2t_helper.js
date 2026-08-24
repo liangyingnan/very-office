@@ -353,6 +353,10 @@
             odt: 'word',
             rtf: 'word',
             txt: 'word',
+            html: 'word',
+            htm: 'word',
+            fb2: 'word',
+            ofd: 'word',
             pdf: 'pdf',
             xlsx: 'cell',
             xls: 'cell',
@@ -705,6 +709,10 @@
             odt: 'application/vnd.oasis.opendocument.text',
             rtf: 'application/rtf',
             txt: 'text/plain',
+            html: 'text/html',
+            htm: 'text/html',
+            fb2: 'application/xml',
+            ofd: 'application/ofd',
             pdf: 'application/pdf',
             xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             xls: 'application/vnd.ms-excel',
@@ -739,6 +747,10 @@
             odp: 'OpenDocument Presentation',
             txt: 'Text Document',
             rtf: 'Rich Text Format',
+            html: 'HTML Document',
+            htm: 'HTML Document',
+            fb2: 'FictionBook 2',
+            ofd: 'OFD Document',
             csv: 'CSV File'
         };
 
@@ -767,6 +779,10 @@
             'fodt': 'docx',
             'ott': 'docx',
             'wps': 'docx',
+            'html': 'docx',
+            'htm': 'docx',
+            'fb2': 'docx',
+            'ofd': 'docx',
         }
         const targetExt = convertMap[fileExt];
         if (targetExt) {

@@ -212,7 +212,7 @@ python -m http.server 8000     # 必须用 http 服务，禁止 file://
 - 版本对齐：`sdkjs` / `web-apps` 为 9.4.0.131；内置 `x2t.wasm` 已是 9.4，无需强行对齐到 CryptPad 的 9.3.0.140。
 - **替换 `9.4.0.131/vendor/` 下任何静态资源（尤其是 `sdkjs/common/wasm/x2t/`）后，必须同步把
   `9.4.0.131/vendor/document_editor_service_worker.js` 中 `g_cacheName` / `g_fifoCacheName` 的 `_vN`
-  后缀 +1**（当前为 `_v19`）。否则 Service Worker 会继续服务旧缓存，可能出现新旧文件混搭
+  后缀 +1**（当前为 `_v22`）。否则 Service Worker 会继续服务旧缓存，可能出现新旧文件混搭
   （如旧 `x2t.js` + 新 `x2t.wasm` 导致的 `Import #0 "a"` wasm 实例化错误）。客户端首次仍需
   在 DevTools → Application → Storage → Clear site data 后硬刷新一次。
 
